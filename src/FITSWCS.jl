@@ -68,6 +68,8 @@ export
     world_to_pixel,
     pix_to_world,
     world_to_pix,
+    pix_to_world!,
+    world_to_pix!,
 
     # Projection primitives (useful for extension and testing)
     intermediate_to_native,

@@ -107,6 +107,16 @@ function world_to_pixel(wcs::WCSTransform, world::AbstractVector)
         lon_idx = wcs.lon_axis
         lat_idx = wcs.lat_axis
 
+        # The fiducial celestial point is defined to have zero intermediate
+        # coordinates; handling it directly avoids pole cancellation.
+        lon_delta = mod(world[lon_idx] - wcs.crval[lon_idx] + 180.0, 360.0) - 180.0
+        if abs(lon_delta) <= 1e-10 && abs(world[lat_idx] - wcs.crval[lat_idx]) <= 1e-10
+            x = world .- wcs.crval
+            x[lon_idx] = 0.0
+            x[lat_idx] = 0.0
+            return intermediate_to_pixel(wcs, x)
+        end
+
         alpha_p = wcs.alpha_p * _D2R_t
         delta_p = wcs.delta_p * _D2R_t
         phi_p   = wcs.lonpole * _D2R_t
@@ -159,6 +169,11 @@ function pixel_to_world(wcs::WCSTransform, pixels::AbstractMatrix)
     return result
 end
 
+function pixel_to_world(wcs::WCSTransform, pixels::AbstractVector{<:AbstractVector})
+    # Treat each nested vector as one coordinate in a simple batch.
+    return [pixel_to_world(wcs, pixel) for pixel in pixels]
+end
+
 """
     world_to_pixel(wcs, worlds::AbstractMatrix) -> Matrix{Float64}
 
@@ -176,4 +191,9 @@ function world_to_pixel(wcs::WCSTransform, worlds::AbstractMatrix)
         result[:, k] = world_to_pixel(wcs, view(worlds, :, k))
     end
     return result
+end
+
+function world_to_pixel(wcs::WCSTransform, worlds::AbstractVector{<:AbstractVector})
+    # Treat each nested vector as one coordinate in a simple batch.
+    return [world_to_pixel(wcs, world) for world in worlds]
 end

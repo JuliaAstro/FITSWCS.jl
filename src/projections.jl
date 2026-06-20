@@ -34,6 +34,11 @@ Common to all zenithal projections.
     return x, y
 end
 
+"""
+Wrap native longitude to the local projection branch around φ₀ = 0.
+"""
+@inline _wrap_native_phi(phi::Real) = phi - 2π * round(phi / (2π))
+
 # ──────────────────────────────────────────────────────────────────────────────
 # TAN – Gnomonic projection   (Paper II, Eq. 54–55)
 # ──────────────────────────────────────────────────────────────────────────────
@@ -251,7 +256,9 @@ end
 Forward CAR projection.
 """
 function native_to_intermediate(::CAR, phi::Real, theta::Real)
-    x = phi   * _R2D
+    # Use the local longitude branch so inverse transforms prefer nearby pixels.
+    phi_w = _wrap_native_phi(phi)
+    x = phi_w * _R2D
     y = theta * _R2D
     return x, y
 end
@@ -283,8 +290,9 @@ end
 Forward CEA projection.
 """
 function native_to_intermediate(proj::CEA, phi::Real, theta::Real)
-    # Longitude is linear for cylindrical projections.
-    x = phi * _R2D
+    # Longitude is linear, using the local branch around the fiducial meridian.
+    phi_w = _wrap_native_phi(phi)
+    x = phi_w * _R2D
 
     # Latitude maps by the equal-area sine relation with lambda scaling.
     y = _R2D * sin(theta) / proj.lambda
@@ -339,7 +347,7 @@ this range are wrapped to it.
 """
 function native_to_intermediate(::AIT, phi::Real, theta::Real)
     # Wrap phi to (-π, π] so that phi/2 ∈ (-π/2, π/2].
-    phi_w = phi - 2π * round(phi / (2π))
+    phi_w = _wrap_native_phi(phi)
     denom = 1.0 + cos(theta) * cos(phi_w / 2.0)
     if denom <= 0.0
         error("AIT projection: degenerate point (1 + cosθ·cos(φ/2) = $denom)")

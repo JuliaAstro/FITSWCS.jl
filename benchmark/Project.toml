@@ -1,0 +1,6 @@
+[deps]
+BenchmarkTools = "6e4b80f9-dd63-53aa-95a3-0cdb28fa8baf"
+FITSWCS = "b9a10f0d-c86c-4e01-8e2e-1f1d7c5fb3f2"
+
+[sources]
+FITSWCS = {path = ".."}

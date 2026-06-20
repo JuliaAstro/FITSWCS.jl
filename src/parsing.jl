@@ -114,6 +114,36 @@ function projection_from_header(code::AbstractString, header::AbstractDict,
     return projection_from_code(c)
 end
 
+function reject_tabular_axes(ctype::Vector{String})
+    # Detect Paper III tabular-coordinate axes before they can be linearized.
+    for (i, ctype_i) in pairs(ctype)
+        _, _, pc = parse_ctype(ctype_i)
+        if pc == "TAB"
+            throw(ArgumentError(
+                "CTYPE$(i)=$(repr(ctype_i)) uses -TAB lookup coordinates, " *
+                "which are not implemented yet"
+            ))
+        end
+    end
+
+    return nothing
+end
+
+function reject_unsupported_nonlinear_axes(ctype::Vector{String})
+    # Non-celestial algorithm-coded axes need Paper III or domain-specific logic.
+    for (i, ctype_i) in pairs(ctype)
+        _, coord_type, pc = parse_ctype(ctype_i)
+        if coord_type == :linear && !isempty(pc)
+            throw(ArgumentError(
+                "CTYPE$(i)=$(repr(ctype_i)) uses unsupported algorithm code " *
+                "$(repr(pc)); only plain linear non-celestial axes are implemented"
+            ))
+        end
+    end
+
+    return nothing
+end
+
 function _wcs_axis_indices(key::AbstractString, alt_str::AbstractString)
     if !endswith(key, alt_str)
         return Int[]
@@ -344,6 +374,8 @@ function from_header(header::AbstractDict; alt::Char=' ')
         ctype[i] = String(get(header,  "CTYPE$(i)$(alt_str)", ""))
         cunit[i] = String(get(header,  "CUNIT$(i)$(alt_str)", ""))
     end
+    reject_tabular_axes(ctype)
+    reject_unsupported_nonlinear_axes(ctype)
 
     # ── Parse CTYPE to determine projection and axis roles ────────────────────
     lon_axis = 0
@@ -387,6 +419,9 @@ function from_header(header::AbstractDict; alt::Char=' ')
 
     projection = isempty(proj_code) ? nothing :
         projection_from_header(proj_code, header, lat_axis, alt)
+
+    # ── Reject unsupported lookup distortions before parsing supported SIP ────
+    reject_lookup_distortion_keywords(header)
 
     # ── Parse optional SIP distortion before building transform output ────────
     sip = parse_sip_distortion(header, crpix, naxis, alt)
