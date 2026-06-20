@@ -70,6 +70,16 @@ end
         @test sys == "RA-TAN"
         @test ct == :linear
         @test pc == ""
+
+        sys, ct, pc = parse_ctype("FREQ-TAB")
+        @test sys == "FREQ"
+        @test ct == :linear
+        @test pc == "TAB"
+
+        sys, ct, pc = parse_ctype("FREQ-LOG")
+        @test sys == "FREQ"
+        @test ct == :linear
+        @test pc == "LOG"
     end
 end
 
@@ -359,6 +369,49 @@ end
         @test_throws ArgumentError from_header(hdr)
     end
 
+    @testset "Error: TAB lookup axes are explicitly unsupported" begin
+        # Paper III -TAB axes require table arrays, so they must not be treated as linear axes.
+        hdr = Dict(
+            "NAXIS"  => 1,
+            "CTYPE1" => "FREQ-TAB",
+            "CRPIX1" => 1.0,
+            "CRVAL1" => 1.0,
+            "CDELT1" => 1.0,
+        )
+        @test_throws ArgumentError from_header(hdr)
+
+        alt_hdr = Dict(
+            "NAXIS"   => 1,
+            "CTYPE1"  => "FREQ",
+            "CTYPE1A" => "WAVE-TAB",
+        )
+        @test pixel_to_world(from_header(alt_hdr), [2.0]) ≈ [2.0]
+        @test_throws ArgumentError from_header(alt_hdr; alt='A')
+    end
+
+    @testset "Error: non-linear spectral algorithms are explicitly unsupported" begin
+        # Paper III algorithms such as LOG and F2W are not equivalent to linear axes.
+        hdr = Dict(
+            "NAXIS"  => 1,
+            "CTYPE1" => "FREQ-LOG",
+            "CRPIX1" => 1.0,
+            "CRVAL1" => 1.0e9,
+            "CDELT1" => 1.0e6,
+        )
+        @test_throws ArgumentError from_header(hdr)
+
+        alt_hdr = Dict(
+            "NAXIS"   => 1,
+            "CTYPE1"  => "FREQ",
+            "CTYPE1A" => "WAVE-F2W",
+            "CRPIX1A" => 1.0,
+            "CRVAL1A" => 500.0,
+            "CDELT1A" => 1.0,
+        )
+        @test pixel_to_world(from_header(alt_hdr), [2.0]) ≈ [2.0]
+        @test_throws ArgumentError from_header(alt_hdr; alt='A')
+    end
+
     @testset "Celestial units are converted without changing linear axes" begin
         # The public celestial API uses degrees while unrelated axes keep header units.
         hdr = Dict(
@@ -495,6 +548,39 @@ end
             "AP_ORDER" => 2,
         ))
     end
+
+    @testset "Unsupported lookup distortion keywords throw clear errors" begin
+        # Paper IV lookup-table distortions must not be ignored as plain WCS.
+        base = Dict(
+            "NAXIS"  => 2,
+            "CTYPE1" => "RA---TAN",
+            "CTYPE2" => "DEC--TAN",
+            "CRPIX1" => 10.0, "CRPIX2" => 10.0,
+            "CRVAL1" => 0.0,  "CRVAL2" => 0.0,
+            "CDELT1" => -1e-3, "CDELT2" => 1e-3,
+        )
+
+        for (key, value) in [
+            ("CPDIS1", "LOOKUP"),
+            ("D2IMDIS1", "LOOKUP"),
+            ("D2IMERR1", 0.01),
+            ("AXISCORR", "OMIT"),
+            ("DP1.NAXES", 2),
+            ("DQ2.AXIS.1", 1),
+        ]
+            hdr = copy(base)
+            hdr[key] = value
+            @test_throws ArgumentError from_header(hdr)
+        end
+
+        # SIP is implemented and should still parse through the distortion path.
+        sip_hdr = copy(base)
+        sip_hdr["CTYPE1"] = "RA---TAN-SIP"
+        sip_hdr["CTYPE2"] = "DEC--TAN-SIP"
+        sip_hdr["A_ORDER"] = 2
+        sip_hdr["B_ORDER"] = 2
+        @test from_header(sip_hdr).sip isa SIPDistortion
+    end
 end
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -541,6 +627,11 @@ end
             @test worlds[:, k] ≈ pixel_to_world(wcs, pixels[:, k])
         end
         @test world_to_pixel(wcs, worlds) ≈ pixels atol=1e-8
+
+        pixel_vectors = [pixels[:, k] for k in axes(pixels, 2)]
+        world_vectors = pixel_to_world(wcs, pixel_vectors)
+        @test world_vectors == [worlds[:, k] for k in axes(worlds, 2)]
+        @test world_to_pixel(wcs, world_vectors) ≈ pixel_vectors atol=1e-8
     end
 
     @testset "Time and Stokes axes remain linear" begin
@@ -589,8 +680,44 @@ end
     @test world_to_pix(wcs, [2.0, 6.0]) ≈ [2.0, 3.0]
     @test world_to_pix(wcs, 2.0, 6.0) ≈ [2.0, 3.0]
     @test pix_to_world(wcs, pixel_batch) ≈ pixel_to_world(wcs, pixel_batch)
+
+    # Constructor compatibility should match the same transform built from a header.
+    constructed = WCSTransform(2;
+        ctype=["X", "Y"],
+        crpix=[1.0, 1.0],
+        crval=[0.0, 0.0],
+        cdelt=[2.0, 3.0],
+    )
+    @test constructed isa WCSTransform
+    @test pixel_to_world(constructed, pixels) ≈ [2.0, 6.0]
+
+    rotated = WCSTransform(2;
+        ctype=["X", "Y"],
+        crpix=[1.0, 1.0],
+        crval=[0.0, 0.0],
+        pc=[0.0 -1.0; 1.0 0.0],
+        cdelt=[2.0, 3.0],
+    )
+    @test pixel_to_world(rotated, [2.0, 1.0]) ≈ [0.0, 3.0]
+
+    # Mutating WCS.jl-style aliases should fill caller-provided output arrays.
+    world_out = similar(pixels)
+    pixel_out = similar(pixels)
+    batch_out = similar(pixel_batch)
+    @test pix_to_world!(wcs, pixels, world_out) === world_out
+    @test world_out ≈ [2.0, 6.0]
+    @test world_to_pix!(wcs, world_out, pixel_out) === pixel_out
+    @test pixel_out ≈ pixels
+    @test pix_to_world!(wcs, pixel_batch, batch_out) === batch_out
+    @test batch_out ≈ pixel_to_world(wcs, pixel_batch)
+
     @test_throws DimensionMismatch pix_to_world(wcs, 1.0)
     @test_throws DimensionMismatch world_to_pix(wcs, [1.0])
+    @test_throws DimensionMismatch pix_to_world!(wcs, pixels, zeros(3))
+    @test_throws DimensionMismatch world_to_pix!(wcs, world_out, zeros(3))
+    @test_throws DimensionMismatch WCSTransform(2; crpix=[1.0])
+    @test_throws DimensionMismatch WCSTransform(2; pc=ones(3, 3))
+    @test_throws ArgumentError WCSTransform(2; restfrq=1.42e9)
 end
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -1168,3 +1295,9 @@ end
 end
 
 end  # @testset "FITSWCS"
+
+# Regression tests against wcslib reference values (Milestone 5).
+include("regression_wcslib.jl")
+
+# Regression tests against stored Astropy values for projections without wcslib fixtures.
+include("regression_astropy_values.jl")

@@ -16,6 +16,35 @@ function has_sip_keywords(header::AbstractDict, alt_str::AbstractString)
     return false
 end
 
+function is_lookup_distortion_keyword(key::AbstractString)
+    ukey = uppercase(String(key))
+
+    # Astropy exposes Paper IV lookup tables as CPDIS and detector-to-image D2IM.
+    startswith(ukey, "CPDIS") && return true
+    startswith(ukey, "D2IMDIS") && return true
+    startswith(ukey, "D2IMERR") && return true
+    ukey == "AXISCORR" && return true
+
+    # wcslib Paper IV distortion parameters use DPja/DQia keyword families.
+    occursin(r"^D[QP][1-9][0-9]*\.", ukey) && return true
+
+    return false
+end
+
+function reject_lookup_distortion_keywords(header::AbstractDict)
+    # Lookup-table distortions affect the pixel pipeline and must not be ignored.
+    for key in keys(header)
+        key isa AbstractString || continue
+        if is_lookup_distortion_keyword(key)
+            throw(ArgumentError(
+                "distortion lookup keyword $key is not implemented yet"
+            ))
+        end
+    end
+
+    return nothing
+end
+
 function read_sip_matrix(header::AbstractDict, prefix::AbstractString,
                           order::Int, alt_str::AbstractString)
     coeff = zeros(Float64, order + 1, order + 1)
