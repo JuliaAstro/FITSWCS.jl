@@ -697,8 +697,12 @@ end
     @test wcs isa WCSTransform
     @test pix_to_world(wcs, pixels) ≈ pixel_to_world(wcs, pixels)
     @test pix_to_world(wcs, 2.0, 3.0) ≈ [2.0, 6.0]
+    @test pix_to_world(wcs, 2.0, 3.0) isa SVector{2,Float64}
+    @test pix_to_world(wcs, (2.0, 3.0)) isa SVector{2,Float64}
     @test world_to_pix(wcs, [2.0, 6.0]) ≈ [2.0, 3.0]
     @test world_to_pix(wcs, 2.0, 6.0) ≈ [2.0, 3.0]
+    @test world_to_pix(wcs, 2.0, 6.0) isa SVector{2,Float64}
+    @test world_to_pix(wcs, (2.0, 6.0)) isa SVector{2,Float64}
     @test pix_to_world(wcs, pixel_batch) ≈ pixel_to_world(wcs, pixel_batch)
 
     # Constructor compatibility should match the same transform built from a header.
@@ -1507,6 +1511,7 @@ end
     @test @inferred(pixel_to_world(wcs_sip, [600.0, 500.0])) isa Vector{Float64}
     @test @inferred(pixel_to_world(wcs_3d,  [40.0, 60.0, 5.0])) isa Vector{Float64}
     @test @inferred(pixel_to_world(wcs_lin, SVector(2.0, 3.0))) isa SVector{2,Float64}
+    @test @inferred(pixel_to_world(wcs_lin, SVector(Float32(2), Float32(3)))) isa SVector{2,Float32}
 
     # world_to_pixel return type is stable across the same paths.
     w_lin = pixel_to_world(wcs_lin, [2.0, 3.0])

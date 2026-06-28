@@ -92,6 +92,8 @@ Convert a single FITS pixel coordinate to world coordinates.
 
 `pixel` must be a length-`wcs.naxis` vector (or tuple) of pixel positions.
 Returns a length-`wcs.naxis` floating-point vector of world coordinates.
+Tuple inputs and scalar varargs are materialized as static coordinates and return
+`SVector` results.
 
 For purely linear WCS (no celestial projection) the result is:
     world[i] = CRVAL[i] + Σⱼ CD[i,j] * (pixel[j] - CRPIX[j])
@@ -148,6 +150,8 @@ Convert world coordinates to FITS pixel coordinates.
 `world` must be a length-`wcs.naxis` vector (or tuple) of world positions
 in the same units as `CRVAL` (degrees for celestial axes).
 Returns a length-`wcs.naxis` floating-point vector of 1-based pixel coordinates.
+Tuple inputs and scalar varargs are materialized as static coordinates and return
+`SVector` results.
 """
 function world_to_pixel(wcs::WCSTransform, world::AbstractVector)
     length(world) == wcs.naxis ||
@@ -276,7 +280,7 @@ end
 """
     pixel_to_world(wcs, pixels::AbstractMatrix) -> AbstractMatrix
 
-Batch pixel-to-world transform.
+Batched pixel-to-world transform. Achieves better throughput than calling the single-coordinate transform repeatedly.
 
 `pixels` must be an `naxis × N` matrix where each column is one pixel
 coordinate.  Returns an `naxis × N` floating-point matrix of world coordinates.
@@ -314,15 +318,22 @@ function pixel_to_world(wcs::WCSTransform, pixels::AbstractMatrix)
     return world
 end
 
+"""
+    pixel_to_world(wcs, pixels::AbstractVector{<:AbstractVector}) -> Vector
+
+Convenience batch transform for a vector of individual pixel coordinates.
+Simply executes an equivalent of `map(pixel -> pixel_to_world(wcs, pixel), pixels)`.
+Total throughput is better for an `naxis × N` matrix of pixel coordinates, so use that form
+when throughput for large batches matters.
+"""
 function pixel_to_world(wcs::WCSTransform, pixels::AbstractVector{<:AbstractVector})
-    # Treat each nested vector as one coordinate in a simple batch.
-    return [pixel_to_world(wcs, pixel) for pixel in pixels]
+    return pixel_to_world.(Ref(wcs), pixels)
 end
 
 """
     world_to_pixel(wcs, worlds::AbstractMatrix) -> AbstractMatrix
 
-Batch world-to-pixel transform.
+Batched world-to-pixel transform. Achieves better throughput than calling the single-coordinate transform repeatedly.
 
 `worlds` must be an `naxis × N` matrix where each column is one world
 coordinate.  Returns an `naxis × N` floating-point matrix of pixel coordinates.
@@ -368,7 +379,14 @@ function world_to_pixel(wcs::WCSTransform, worlds::AbstractMatrix)
     return _intermediate_to_pixel_batch(wcs, intermediate, T)
 end
 
+"""
+    world_to_pixel(wcs, worlds::AbstractVector{<:AbstractVector}) -> Vector
+
+Convenience batch transform for a vector of individual world coordinates.
+Simply executes an equivalent of `map(world -> world_to_pixel(wcs, world), worlds)`.
+Total throughput is better for an `naxis × N` matrix of world coordinates, so use that form
+when throughput for large batches matters.
+"""
 function world_to_pixel(wcs::WCSTransform, worlds::AbstractVector{<:AbstractVector})
-    # Treat each nested vector as one coordinate in a simple batch.
-    return [world_to_pixel(wcs, world) for world in worlds]
+    return world_to_pixel.(Ref(wcs), worlds)
 end

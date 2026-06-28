@@ -125,7 +125,7 @@ const _world_cube = pixel_to_world(WCS_CUBE, _pix_cube)
 # Batch of 100 pixels for TAN
 const _batch_pix = [p .+ [i*0.5, i*0.3] for i in 1:100 for p in [_pix_tan]] |>
                    (x -> reduce(hcat, x))  # 2×100 matrix
-const _batch_world = [pixel_to_world(WCS_TAN, _batch_pix[:,i]) for i in 1:100]
+const _batch_world = pixel_to_world(WCS_TAN, _batch_pix)
 
 # Batch of 1M pixels for TAN
 const _batch_pix_1M = [p .+ [i*0.5, i*0.3] for i in 1:1_000_000 for p in [_pix_tan]] |>
