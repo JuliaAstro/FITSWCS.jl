@@ -1449,7 +1449,7 @@ end
                 # SIN projection: ensure the point is inside the unit circle.
                 if proj isa SIN
                     while true
-                        Rth = sqrt(cos(theta)^2)   # = |cos(theta)|
+                        Rth = abs(cos(theta))   # = |cos(theta)|
                         Rth < 0.99 && break
                         theta = th_lo + (th_hi - th_lo) * rand(rng)
                     end
