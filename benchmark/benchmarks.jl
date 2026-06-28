@@ -18,6 +18,53 @@ Groups:
 
 using BenchmarkTools
 using FITSWCS
+using PrettyTables
+
+function show_benchmarks(results)
+    # Collect results — results may be a flat Dict or a nested BenchmarkGroup;
+    # flatten first so that every value is a Trial.
+    flat = flatten_results(results)
+    # Collect results
+    sorted = sort(collect(flat), by=first)
+    names = [k for (k,_) in sorted]
+    trials = [v for (_,v) in sorted]
+
+    # Pack into matrix
+    data = hcat(
+        names,
+        [BenchmarkTools.prettytime(median(t).time) for t in trials],
+        [BenchmarkTools.prettymemory(median(t).memory) for t in trials],
+        [median(t).allocs for t in trials]
+    )
+
+    # Make pretty table
+    pretty_table(data;
+        column_labels = ["Benchmark", "Median Time", "Memory", "Allocs"],
+        alignment     = [:l, :r, :r, :r]
+    )
+end
+
+function flatten_results(group)
+    # Recursively flatten a (possibly nested) BenchmarkGroup of Trial results
+    # into a flat Dict{String, Trial}.  Dict inputs are returned as-is so that
+    # the function is idempotent.
+    flat = Dict{String, Any}()
+    _flatten_results!(flat, group, "")
+    return flat
+end
+
+function _flatten_results!(flat, group, prefix)
+    for (k, v) in group
+        fullname = isempty(prefix) ? string(k) : "$prefix/$k"
+        if v isa BenchmarkGroup
+            _flatten_results!(flat, v, fullname)
+        else
+            flat[fullname] = v
+        end
+    end
+end
+
+#  ────────────────────────────────────────────────────────────────────────────
 
 const SUITE = BenchmarkGroup()
 
@@ -117,4 +164,14 @@ let g = SUITE["parsing"]
     g["from_header/AIT"]     = @benchmarkable from_header($_hdr_ait)
     g["from_header/TAN-SIP"] = @benchmarkable from_header($_hdr_sip)
     g["from_header/3D-cube"] = @benchmarkable from_header($_hdr_cube)
+end
+
+
+# ── If not on CI, show a nice table ──────────────────────────────────────────
+if get(ENV, "CI", "false") == "false"
+    # Run the requested benchmarks and print a table for each suite.
+    # run_selected_suites(ARGS)
+    # Run the benchmarks
+    results = run(SUITE, verbose=true)
+    show_benchmarks(results)
 end
