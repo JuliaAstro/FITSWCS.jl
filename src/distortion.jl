@@ -100,7 +100,7 @@ function parse_sip_distortion(header::AbstractDict, crpix::Vector{Float64},
         bp = read_sip_matrix(header, "BP", bp_order, alt_str)
     end
 
-    return SIPDistortion(crpix[1:2], a, b, ap, bp)
+    return SIPDistortion(SVector{2,Float64}(crpix[1:2]), a, b, ap, bp)
 end
 
 function evaluate_sip_polynomial(coeff::AbstractMatrix, u::Real, v::Real)

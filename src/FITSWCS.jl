@@ -41,6 +41,7 @@ world_batch = pixel_to_world(wcs, pix_batch)
 module FITSWCS
 
 using LinearAlgebra: I, \
+using StaticArrays: SMatrix, SVector, StaticVector
 
 include("types.jl")
 include("units.jl")

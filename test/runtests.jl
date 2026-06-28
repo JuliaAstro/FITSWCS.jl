@@ -4,6 +4,7 @@ using Random
 using FITSWCS
 using FITSFiles
 using FITSIO
+using StaticArrays
 using FITSWCS: pixel_to_intermediate, intermediate_to_pixel,
                parse_ctype, projection_from_code,
                native_to_celestial, celestial_to_native,
@@ -1488,16 +1489,20 @@ end
     wcs_sip = from_header(hdr_sip)
     wcs_3d  = from_header(hdr_3d)
 
-    # from_header return type is stable.
-    @test @inferred(from_header(hdr_lin)) isa WCSTransform
-    @test @inferred(from_header(hdr_tan)) isa WCSTransform
-    @test @inferred(from_header(hdr_sip)) isa WCSTransform
+    # Parsed transforms should store small numeric WCS state in static arrays.
+    @test from_header(hdr_lin) isa WCSTransform
+    @test from_header(hdr_tan) isa WCSTransform
+    @test from_header(hdr_sip) isa WCSTransform
+    @test wcs_tan.crpix isa SVector{2,Float64}
+    @test wcs_tan.crval isa SVector{2,Float64}
+    @test wcs_tan.cd isa SMatrix{2,2,Float64,4}
 
     # pixel_to_world return type is stable across linear, celestial, SIP, and 3D paths.
     @test @inferred(pixel_to_world(wcs_lin, [2.0, 3.0]))  isa Vector{Float64}
     @test @inferred(pixel_to_world(wcs_tan, [400.0, 300.0])) isa Vector{Float64}
     @test @inferred(pixel_to_world(wcs_sip, [600.0, 500.0])) isa Vector{Float64}
     @test @inferred(pixel_to_world(wcs_3d,  [40.0, 60.0, 5.0])) isa Vector{Float64}
+    @test @inferred(pixel_to_world(wcs_lin, SVector(2.0, 3.0))) isa SVector{2,Float64}
 
     # world_to_pixel return type is stable across the same paths.
     w_lin = pixel_to_world(wcs_lin, [2.0, 3.0])
@@ -1508,6 +1513,7 @@ end
     @test @inferred(world_to_pixel(wcs_tan, w_tan)) isa Vector{Float64}
     @test @inferred(world_to_pixel(wcs_sip, w_sip)) isa Vector{Float64}
     @test @inferred(world_to_pixel(wcs_3d,  w_3d))  isa Vector{Float64}
+    @test @inferred(world_to_pixel(wcs_lin, SVector(2.0, 3.0))) isa SVector{2,Float64}
 
     # Batch (matrix) forms return Matrix{Float64}.
     pix_mat = [1.0 512.0; 1.0 512.0]

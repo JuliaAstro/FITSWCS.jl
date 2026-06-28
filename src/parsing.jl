@@ -519,7 +519,11 @@ function from_header(header::AbstractDict; alt::Char=' ')
     end
 
     return WCSTransform(
-        naxis, crpix, crval, cd, ctype, cunit,
+        naxis,
+        SVector{naxis,Float64}(crpix),
+        SVector{naxis,Float64}(crval),
+        SMatrix{naxis,naxis,Float64,naxis*naxis}(cd),
+        ctype, cunit,
         lonpole, latpole, alpha_p, delta_p,
         projection, sip, lon_axis, lat_axis,
     )

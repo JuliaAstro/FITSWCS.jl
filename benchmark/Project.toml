@@ -2,6 +2,7 @@
 BenchmarkTools = "6e4b80f9-dd63-53aa-95a3-0cdb28fa8baf"
 FITSWCS = "b9a10f0d-c86c-4e01-8e2e-1f1d7c5fb3f2"
 PrettyTables = "08abe8d2-0d0c-5749-adfa-8a2ac140af0d"
+StaticArrays = "90137ffa-7385-5640-81b9-e52037218182"
 
 [sources]
 FITSWCS = {path = ".."}
