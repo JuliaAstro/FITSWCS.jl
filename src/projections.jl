@@ -149,17 +149,17 @@ function intermediate_to_native(sin_proj::SIN, x::Real, y::Real)
     # Convert x, y to radians (projection formulas use dimensionless coords)
     xr = deg2rad(x)
     yr = deg2rad(y)
-    r2 = xr^2 + yr^2
+    r = hypot(xr, yr)
 
     # WCSLIB fixes the undefined native longitude at the projection center.
-    iszero(r2) && return zero(T), _halfpi(T)
+    iszero(r) && return zero(T), _halfpi(T)
 
     if iszero(xi) && iszero(eta)
         # Standard SIN: R_θ = cos(θ)  (in unit sphere coords)
-        if r2 > oneT
-            error("SIN projection: point outside valid domain (R_θ = $(sqrt(r2)) > 1)")
+        if r > oneT
+            error("SIN projection: point outside valid domain (R_θ = $(r) > 1)")
         end
-        theta = acos(sqrt(r2))   # θ = acos(R_θ)
+        theta = acos(r)   # θ = acos(R_θ)
         phi = atan(xr, -yr)
     else
         # Slant SIN: solve quadratic (Paper II, Eq. 49)
@@ -220,7 +220,7 @@ function intermediate_to_native(::STG, x::Real, y::Real)
     # = 2*sqrt((1-s)(1+s))/(1+s) = 2*sqrt((1-s)/(1+s))
     # → (Rth/(2*R2D))² = (1-s)/(1+s)
     # → r = Rth/(2*R2D): s = (1-r²)/(1+r²)
-    r = deg2rad(Rth)
+    r = deg2rad(Rth) / 2
     sth = (1 - r^2) / (1 + r^2)
     theta = asin(clamp(sth, -one(T), one(T)))
     return phi, theta
