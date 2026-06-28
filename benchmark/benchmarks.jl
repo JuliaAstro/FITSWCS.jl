@@ -128,9 +128,9 @@ const _batch_pix = [p .+ [i*0.5, i*0.3] for i in 1:100 for p in [_pix_tan]] |>
 const _batch_world = [pixel_to_world(WCS_TAN, _batch_pix[:,i]) for i in 1:100]
 
 # Batch of 1M pixels for TAN
-# const _batch_pix_1M = [p .+ [i*0.5, i*0.3] for i in 1:1_000_000 for p in [_pix_tan]] |>
-#                       (x -> reduce(hcat, x))  # 2×1_000_000 matrix
-# const _batch_world_1M = [pixel_to_world(WCS_TAN, _batch_pix_1M[:,i]) for i in 1:1_000_000]
+const _batch_pix_1M = [p .+ [i*0.5, i*0.3] for i in 1:1_000_000 for p in [_pix_tan]] |>
+                      (x -> reduce(hcat, x))  # 2×1_000_000 matrix
+const _batch_world_1M = pixel_to_world(WCS_TAN, _batch_pix_1M)
 
 # ── pixel_to_world ───────────────────────────────────────────────────────────
 
@@ -144,6 +144,7 @@ let g = SUITE["pixel_to_world"]
     g["TAN-SIP/scalar"] = @benchmarkable pixel_to_world($WCS_SIP, $_pix_sip)
     g["3D-cube/scalar"] = @benchmarkable pixel_to_world($WCS_CUBE, $_pix_cube)
     g["TAN/batch-100"]  = @benchmarkable pixel_to_world($WCS_TAN, $_batch_pix)
+    g["TAN/batch-1M"]  = @benchmarkable pixel_to_world($WCS_TAN, $_batch_pix_1M)
 end
 
 # ── world_to_pixel ───────────────────────────────────────────────────────────
@@ -155,6 +156,7 @@ let g = SUITE["world_to_pixel"]
     g["TAN-SIP/scalar"] = @benchmarkable world_to_pixel($WCS_SIP, $_world_sip)
     g["3D-cube/scalar"] = @benchmarkable world_to_pixel($WCS_CUBE, $_world_cube)
     g["TAN/batch-100"]  = @benchmarkable world_to_pixel($WCS_TAN, $_batch_world)
+    g["TAN/batch-1M"]  = @benchmarkable world_to_pixel($WCS_TAN, $_batch_world_1M)
 end
 
 # ── parsing ──────────────────────────────────────────────────────────────────
