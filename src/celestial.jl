@@ -71,6 +71,8 @@ end
 Return the native latitude of the fiducial point (θ₀) in degrees.
 For all zenithal projections this is 90°.
 """
+native_theta0(::AZP) = 90.0
+native_theta0(::SZP) = 90.0
 native_theta0(::TAN) = 90.0
 native_theta0(::SIN) = 90.0
 native_theta0(::STG) = 90.0
@@ -83,6 +85,7 @@ native_theta0(::MER) = 0.0
 native_theta0(::SFL) = 0.0
 native_theta0(::PAR) = 0.0
 native_theta0(::MOL) = 0.0
+native_theta0(::PCO) = 0.0
 native_theta0(::AIT) = 0.0
 native_theta0(::UnknownProjection) = 90.0
 

@@ -78,6 +78,8 @@ Returns `UnknownProjection(code)` for unrecognised codes rather than throwing.
 """
 function projection_from_code(code::AbstractString)
     c = uppercase(strip(code))
+    c == "AZP" && return AZP()
+    c == "SZP" && return SZP()
     c == "TAN" && return TAN()
     c == "SIN" && return SIN()
     c == "STG" && return STG()
@@ -88,6 +90,7 @@ function projection_from_code(code::AbstractString)
     c == "SFL" && return SFL()
     c == "PAR" && return PAR()
     c == "MOL" && return MOL()
+    c == "PCO" && return PCO()
     c == "CAR" && return CAR()
     c == "CEA" && return CEA()
     c == "AIT" && return AIT()
@@ -97,6 +100,27 @@ end
 function projection_from_header(code::AbstractString, header::AbstractDict,
                                  lat_axis::Int, alt::Char)
     c = uppercase(strip(code))
+
+    # AZP defaults to the TAN-equivalent perspective case when PV terms are absent.
+    if c == "AZP"
+        alt_str = alt == ' ' ? "" : string(alt)
+        mu = Float64(get(header, "PV$(lat_axis)_1$(alt_str)", 0.0))
+        gamma = Float64(get(header, "PV$(lat_axis)_2$(alt_str)", 0.0))
+        mu == 0.0 && gamma == 0.0 ||
+            throw(ArgumentError("AZP non-default PV parameters are not implemented yet"))
+        return AZP()
+    end
+
+    # SZP defaults to the same central perspective as TAN/AZP.
+    if c == "SZP"
+        alt_str = alt == ' ' ? "" : string(alt)
+        mu = Float64(get(header, "PV$(lat_axis)_1$(alt_str)", 0.0))
+        phi_c = Float64(get(header, "PV$(lat_axis)_2$(alt_str)", 0.0))
+        theta_c = Float64(get(header, "PV$(lat_axis)_3$(alt_str)", 90.0))
+        mu == 0.0 && phi_c == 0.0 && theta_c == 90.0 ||
+            throw(ArgumentError("SZP non-default PV parameters are not implemented yet"))
+        return SZP()
+    end
 
     # SIN uses slant orthographic parameters on the latitude-like axis.
     if c == "SIN"

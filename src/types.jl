@@ -9,6 +9,20 @@ abstract type AbstractProjection end
 
 # ── Zenithal (azimuthal) projections ──────────────────────────────────────────
 
+"""    AZP
+
+Zenithal perspective projection.  FITS projection code `AZP`.
+The current implementation supports the default parameter form.
+"""
+struct AZP <: AbstractProjection end
+
+"""    SZP
+
+Slant zenithal perspective projection.  FITS projection code `SZP`.
+The current implementation supports the default parameter form.
+"""
+struct SZP <: AbstractProjection end
+
 """    TAN
 
 Gnomonic (tangent-plane) projection.  FITS projection code `TAN`.
@@ -104,6 +118,12 @@ struct PAR <: AbstractProjection end
 Mollweide projection.  FITS projection code `MOL`.
 """
 struct MOL <: AbstractProjection end
+
+"""    PCO
+
+Polyconic projection.  FITS projection code `PCO`.
+"""
+struct PCO <: AbstractProjection end
 
 """    AIT
 
