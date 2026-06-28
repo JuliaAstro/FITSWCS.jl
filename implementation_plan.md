@@ -584,6 +584,128 @@ Maintain a docs/dev/wcs_compliance_matrix.md file as you work, listing every FIT
 
 ---
 
+## Astropy Gap Backlog
+
+These tasks come from comparing FITSWCS.jl with Astropy 6.1.7 / WCSLIB 8.3
+using `semble search` and focused `python3.10` probes.
+
+### Task A: Expand Projection Coverage To WCSLIB `PRJ_CODES`
+
+Astropy exposes the WCSLIB projection set `AZP`, `SZP`, `TAN`, `STG`, `SIN`,
+`ARC`, `ZPN`, `ZEA`, `AIR`, `CYP`, `CEA`, `CAR`, `MER`, `SFL`, `PAR`, `MOL`,
+`AIT`, `COP`, `COE`, `COD`, `COO`, `BON`, `PCO`, `TSC`, `CSC`, `QSC`, `HPX`,
+and `XPH`.
+
+Implementation notes:
+
+* Add each projection as an explicit Julia type and parser mapping.
+* Parse projection parameters from `PV<lat>_m` consistently with WCSLIB.
+* Prefer closed-form inverses where the standard gives them; use bounded Newton
+  solves with clear convergence failures for polynomial/implicit projections.
+* Add Astropy/WCSLIB-generated absolute-value regression tests, not just
+  round-trip tests.
+* Keep high-risk projections such as `ZPN`, `AIR`, conics, quadcube, and
+  HEALPix in small independently reviewed slices.
+
+### Task B: Implement Paper IV Distortion Lookup Tables
+
+Astropy's full pipeline applies detector-to-image lookup corrections, SIP,
+Paper IV lookup corrections, then the core WCS transform.
+
+Implementation notes:
+
+* Represent `CPDIS1/2`, `D2IMDIS1/2`, `DP*`, `DQ*`, and related lookup-table
+  metadata explicitly instead of rejecting them.
+* Add image/table HDU readers through existing FITSIO.jl and FITSFiles.jl
+  extensions.
+* Implement bilinear interpolation for lookup-table offsets.
+* Invert the complete distortion pipeline with a vectorized iterative solver
+  and convergence diagnostics.
+
+### Task C: Implement Paper III Spectral And Tabular Coordinates
+
+FITSWCS currently supports plain linear spectral axes but rejects `-TAB` and
+non-celestial algorithm-coded axes such as `FREQ-LOG`.
+
+Implementation notes:
+
+* Add `-TAB` table parsing, coordinate arrays, indexing vectors, and
+  interpolation.
+* Add logarithmic and non-linear spectral algorithms, including velocity and
+  wavelength/frequency conversions.
+* Parse and use `RESTFRQ`, `RESTWAV`, `SPECSYS`, observer/target frame
+  metadata, and relevant unit conversions.
+* Compare against Astropy/WCSLIB for representative `FREQ`, `WAVE`, `VRAD`,
+  `VOPT`, and `VELO` headers.
+
+### Task D: Add TPV/TPD And SCAMP Compatibility
+
+Astropy handles `-TPV`, removes conflicting SIP when TPV is explicit, and
+contains compatibility handling for older SCAMP headers that encode TPV terms
+with `-TAN`.
+
+Implementation notes:
+
+* Parse TPV/TPD polynomial coefficients from PV keywords.
+* Define precedence rules for TPV versus SIP.
+* Add a compatibility mode for pre-2012 SCAMP `-TAN` + PV headers, gated by an
+  explicit parser option if needed.
+
+### Task E: Add Time And Stokes Semantics
+
+Linear `TIME` and `STOKES` axes currently transform numerically but do not carry
+physical interpretation.
+
+Implementation notes:
+
+* Parse FITS time metadata such as `MJDREF`, `DATEREF`, `DATE-OBS`, `TIMESYS`,
+  `TIMEUNIT`, `TREFPOS`, and observatory position keywords.
+* Represent Stokes axes as quantized polarization states rather than ordinary
+  continuous linear coordinates.
+* Add metadata accessors while keeping numeric transform APIs stable.
+
+### Task F: Add APE 14-Style Axis Metadata
+
+Astropy exposes world-axis physical types, names, units, high-level object
+classes, pixel shapes/bounds, and axis-correlation matrices.
+
+Implementation notes:
+
+* Add axis classification for celestial, spectral, temporal, Stokes, tabular,
+  and generic linear axes.
+* Add `world_axis_physical_types`, `world_axis_units`, `world_axis_names`, and
+  `axis_correlation_matrix` accessors.
+* Compute correlations from the CD/PC matrix and celestial axis coupling; mark
+  all axes correlated when full-image distortion is present.
+
+### Task G: Add Header Serialization, Validation, And Fixups
+
+Astropy/WCSLIB can serialize WCS objects, find all alternate WCS descriptions,
+validate files, and apply common fixups.
+
+Implementation notes:
+
+* Implement `to_header`/`to_fits` equivalents for the supported keyword subset.
+* Add `find_all_wcs` over primary and alternate WCS suffixes.
+* Add validation and optional fixups analogous to `cdfix`, `unitfix`,
+  `datfix`, `spcfix`, and `cylfix`, keeping automatic mutation opt-in.
+
+### Task H: Add WCS Subsetting, Slicing, And Comparison
+
+Astropy can extract separable sub-WCS objects, slice WCSes, compare WCS
+metadata, and transform pixel coordinates between WCS objects.
+
+Implementation notes:
+
+* Implement separability checks based on the linear matrix and distortion
+  presence.
+* Add subsetting helpers for celestial, spectral, temporal, and Stokes axes.
+* Add WCS comparison options for ancillary keywords, CRPIX shifts, and tiling.
+* Build pixel-to-pixel utilities on top of `pixel_to_world` and
+  `world_to_pixel`.
+
+---
+
 ## Development Loop
 
 Work in small cycles.

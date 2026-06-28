@@ -83,6 +83,11 @@ function projection_from_code(code::AbstractString)
     c == "STG" && return STG()
     c == "ARC" && return ARC()
     c == "ZEA" && return ZEA()
+    c == "CYP" && return CYP()
+    c == "MER" && return MER()
+    c == "SFL" && return SFL()
+    c == "PAR" && return PAR()
+    c == "MOL" && return MOL()
     c == "CAR" && return CAR()
     c == "CEA" && return CEA()
     c == "AIT" && return AIT()
@@ -108,6 +113,18 @@ function projection_from_header(code::AbstractString, header::AbstractDict,
         (0.0 < lambda <= 1.0) ||
             throw(ArgumentError("CEA PV$(lat_axis)_1 must be in (0, 1], got $lambda"))
         return CEA(lambda)
+    end
+
+    # CYP uses latitude-axis parameters 1 and 2 for lambda and mu.
+    if c == "CYP"
+        alt_str = alt == ' ' ? "" : string(alt)
+        lambda = Float64(get(header, "PV$(lat_axis)_1$(alt_str)", 1.0))
+        mu = Float64(get(header, "PV$(lat_axis)_2$(alt_str)", 1.0))
+        lambda != 0.0 ||
+            throw(ArgumentError("CYP PV$(lat_axis)_1 must be non-zero"))
+        mu + lambda != 0.0 ||
+            throw(ArgumentError("CYP PV$(lat_axis)_1 + PV$(lat_axis)_2 must be non-zero"))
+        return CYP(lambda, mu)
     end
 
     # Other supported projections currently have no parsed PV parameters.
@@ -421,7 +438,7 @@ function from_header(header::AbstractDict; alt::Char=' ')
         projection_from_header(proj_code, header, lat_axis, alt)
 
     # ── Reject unsupported lookup distortions before parsing supported SIP ────
-    reject_lookup_distortion_keywords(header)
+    reject_lookup_distortion_keywords(header, alt_str)
 
     # ── Parse optional SIP distortion before building transform output ────────
     sip = parse_sip_distortion(header, crpix, naxis, alt)
