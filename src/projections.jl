@@ -300,6 +300,200 @@ function native_to_intermediate(proj::CEA, phi::Real, theta::Real)
 end
 
 # ──────────────────────────────────────────────────────────────────────────────
+# CYP – Cylindrical perspective projection   (Paper II, Eq. 76–77)
+# ──────────────────────────────────────────────────────────────────────────────
+
+"""
+    intermediate_to_native(proj::CYP, x, y) -> (phi, theta)
+
+Inverse CYP projection.  `lambda` and `mu` are projection parameters.
+"""
+function intermediate_to_native(proj::CYP, x::Real, y::Real)
+    # Longitude scales linearly by the cylindrical perspective lambda.
+    phi = (x * _D2R) / proj.lambda
+
+    # Solve the perspective ordinate relation in closed form.
+    eta = y * _D2R / (proj.mu + proj.lambda)
+    theta = atan(eta, 1.0) + asin(clamp((eta * proj.mu) / hypot(eta, 1.0), -1.0, 1.0))
+    return phi, theta
+end
+
+"""
+    native_to_intermediate(proj::CYP, phi, theta) -> (x, y)
+
+Forward CYP projection.
+"""
+function native_to_intermediate(proj::CYP, phi::Real, theta::Real)
+    # Wrap longitude locally before applying the linear cylindrical scale.
+    phi_w = _wrap_native_phi(phi)
+    x = _R2D * proj.lambda * phi_w
+
+    # Project latitude by the perspective cylinder relation.
+    denom = proj.mu + cos(theta)
+    denom != 0.0 ||
+        error("CYP projection: singularity where mu + cos(theta) = 0")
+    y = _R2D * (proj.mu + proj.lambda) * sin(theta) / denom
+    return x, y
+end
+
+# ──────────────────────────────────────────────────────────────────────────────
+# MER – Mercator projection   (Paper II, Eq. 86)
+# ──────────────────────────────────────────────────────────────────────────────
+
+"""
+    intermediate_to_native(::MER, x, y) -> (phi, theta)
+
+Inverse MER projection.
+"""
+function intermediate_to_native(::MER, x::Real, y::Real)
+    # Longitude is linear and latitude is the inverse Mercator ordinate.
+    phi = x * _D2R
+    theta = 2.0 * atan(exp(y * _D2R)) - π/2
+    return phi, theta
+end
+
+"""
+    native_to_intermediate(::MER, phi, theta) -> (x, y)
+
+Forward MER projection.
+"""
+function native_to_intermediate(::MER, phi::Real, theta::Real)
+    # Mercator is singular at the native poles.
+    abs(abs(theta) - π/2) > 1e-14 ||
+        error("MER projection: singularity at theta = ±90°")
+    phi_w = _wrap_native_phi(phi)
+    x = phi_w * _R2D
+    y = _R2D * log(tan(π/4 + theta/2))
+    return x, y
+end
+
+# ──────────────────────────────────────────────────────────────────────────────
+# SFL – Sanson-Flamsteed projection   (Paper II, Eq. 88)
+# ──────────────────────────────────────────────────────────────────────────────
+
+"""
+    intermediate_to_native(::SFL, x, y) -> (phi, theta)
+
+Inverse SFL projection.
+"""
+function intermediate_to_native(::SFL, x::Real, y::Real)
+    # Latitude is linear; longitude expands by sec(theta).
+    theta = y * _D2R
+    cth = cos(theta)
+    abs(cth) > 1e-14 ||
+        error("SFL projection: longitude is undefined at theta = ±90°")
+    phi = (x * _D2R) / cth
+    return phi, theta
+end
+
+"""
+    native_to_intermediate(::SFL, phi, theta) -> (x, y)
+
+Forward SFL projection.
+"""
+function native_to_intermediate(::SFL, phi::Real, theta::Real)
+    # Longitude contracts by cos(theta), with latitude preserved.
+    phi_w = _wrap_native_phi(phi)
+    x = _R2D * phi_w * cos(theta)
+    y = _R2D * theta
+    return x, y
+end
+
+# ──────────────────────────────────────────────────────────────────────────────
+# PAR – Parabolic projection   (Paper II, Eq. 89)
+# ──────────────────────────────────────────────────────────────────────────────
+
+"""
+    intermediate_to_native(::PAR, x, y) -> (phi, theta)
+
+Inverse PAR projection.
+"""
+function intermediate_to_native(::PAR, x::Real, y::Real)
+    # Recover latitude from the parabolic sine ordinate.
+    arg = (y * _D2R) / π
+    abs(arg) <= 1.0 ||
+        error("PAR projection: point outside valid domain (|y*pi/180/pi| = $(abs(arg)) > 1)")
+    theta = 3.0 * asin(clamp(arg, -1.0, 1.0))
+
+    # Longitude uses the latitude-dependent parabolic scale factor.
+    scale = 2.0 * cos(2.0 * theta / 3.0) - 1.0
+    scale != 0.0 ||
+        error("PAR projection: longitude scale is zero")
+    phi = (x * _D2R) / scale
+    return phi, theta
+end
+
+"""
+    native_to_intermediate(::PAR, phi, theta) -> (x, y)
+
+Forward PAR projection.
+"""
+function native_to_intermediate(::PAR, phi::Real, theta::Real)
+    # Apply the parabolic longitude scale and sine latitude ordinate.
+    phi_w = _wrap_native_phi(phi)
+    x = _R2D * phi_w * (2.0 * cos(2.0 * theta / 3.0) - 1.0)
+    y = _R2D * π * sin(theta / 3.0)
+    return x, y
+end
+
+# ──────────────────────────────────────────────────────────────────────────────
+# MOL – Mollweide projection   (Paper II, Eq. 90)
+# ──────────────────────────────────────────────────────────────────────────────
+
+const _MOL_MAXITER = 30
+const _MOL_TOL = 1e-14
+
+function _mollweide_gamma(theta::Real)
+    # Solve 2γ + sin(2γ) = π sin(theta) with Newton iteration.
+    abs(abs(theta) - π/2) <= 1e-14 && return copysign(π/2, theta)
+    gamma = theta
+    target = π * sin(theta)
+    for _ in 1:_MOL_MAXITER
+        f = 2.0 * gamma + sin(2.0 * gamma) - target
+        fp = 2.0 + 2.0 * cos(2.0 * gamma)
+        fp != 0.0 || break
+        step = f / fp
+        gamma -= step
+        abs(step) <= _MOL_TOL && return gamma
+    end
+    error("MOL projection: auxiliary angle solve failed to converge")
+end
+
+"""
+    intermediate_to_native(::MOL, x, y) -> (phi, theta)
+
+Inverse MOL projection.
+"""
+function intermediate_to_native(::MOL, x::Real, y::Real)
+    # Recover the auxiliary angle gamma from the vertical coordinate.
+    sin_gamma = (y * _D2R) / sqrt(2.0)
+    abs(sin_gamma) <= 1.0 ||
+        error("MOL projection: point outside valid domain (|sin_gamma| = $(abs(sin_gamma)) > 1)")
+    gamma = asin(clamp(sin_gamma, -1.0, 1.0))
+
+    # Convert gamma to native latitude and undo the longitude scale.
+    theta = asin(clamp((2.0 * gamma + sin(2.0 * gamma)) / π, -1.0, 1.0))
+    cos_gamma = cos(gamma)
+    abs(cos_gamma) > 1e-14 || return 0.0, theta
+    phi = (x * _D2R) * π / (2.0 * sqrt(2.0) * cos_gamma)
+    return phi, theta
+end
+
+"""
+    native_to_intermediate(::MOL, phi, theta) -> (x, y)
+
+Forward MOL projection.
+"""
+function native_to_intermediate(::MOL, phi::Real, theta::Real)
+    # Solve the implicit Mollweide latitude equation before projecting.
+    phi_w = _wrap_native_phi(phi)
+    gamma = _mollweide_gamma(theta)
+    x = _R2D * (2.0 * sqrt(2.0) / π) * phi_w * cos(gamma)
+    y = _R2D * sqrt(2.0) * sin(gamma)
+    return x, y
+end
+
+# ──────────────────────────────────────────────────────────────────────────────
 # AIT – Hammer-Aitoff projection   (Paper II, Eq. 75)
 # ──────────────────────────────────────────────────────────────────────────────
 

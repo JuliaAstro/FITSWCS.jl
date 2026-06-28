@@ -68,7 +68,42 @@ struct CEA <: AbstractProjection
 end
 CEA() = CEA(1.0)
 
+"""    CYP
+
+Cylindrical perspective projection.  FITS projection code `CYP`.
+Parameters `lambda` and `mu` are read from `PV<lat>_1` and `PV<lat>_2`.
+"""
+struct CYP <: AbstractProjection
+    lambda::Float64
+    mu::Float64
+end
+CYP() = CYP(1.0, 1.0)
+
+"""    MER
+
+Mercator projection.  FITS projection code `MER`.
+"""
+struct MER <: AbstractProjection end
+
 # ── Pseudo-cylindrical projections ────────────────────────────────────────────
+
+"""    SFL
+
+Sanson-Flamsteed projection.  FITS projection code `SFL`.
+"""
+struct SFL <: AbstractProjection end
+
+"""    PAR
+
+Parabolic projection.  FITS projection code `PAR`.
+"""
+struct PAR <: AbstractProjection end
+
+"""    MOL
+
+Mollweide projection.  FITS projection code `MOL`.
+"""
+struct MOL <: AbstractProjection end
 
 """    AIT
 

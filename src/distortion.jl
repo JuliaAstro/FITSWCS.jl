@@ -16,26 +16,27 @@ function has_sip_keywords(header::AbstractDict, alt_str::AbstractString)
     return false
 end
 
-function is_lookup_distortion_keyword(key::AbstractString)
+function is_lookup_distortion_keyword(key::AbstractString, alt_str::AbstractString="")
     ukey = uppercase(String(key))
+    suffix = uppercase(String(alt_str))
 
     # Astropy exposes Paper IV lookup tables as CPDIS and detector-to-image D2IM.
-    startswith(ukey, "CPDIS") && return true
-    startswith(ukey, "D2IMDIS") && return true
-    startswith(ukey, "D2IMERR") && return true
-    ukey == "AXISCORR" && return true
+    occursin(Regex("^CPDIS[1-9][0-9]*$(suffix)\$"), ukey) && return true
+    occursin(Regex("^D2IMDIS[1-9][0-9]*$(suffix)\$"), ukey) && return true
+    occursin(Regex("^D2IMERR[1-9][0-9]*$(suffix)\$"), ukey) && return true
+    ukey == "AXISCORR$(suffix)" && return true
 
     # wcslib Paper IV distortion parameters use DPja/DQia keyword families.
-    occursin(r"^D[QP][1-9][0-9]*\.", ukey) && return true
+    occursin(Regex("^D[QP][1-9][0-9]*$(suffix)\\."), ukey) && return true
 
     return false
 end
 
-function reject_lookup_distortion_keywords(header::AbstractDict)
-    # Lookup-table distortions affect the pixel pipeline and must not be ignored.
+function reject_lookup_distortion_keywords(header::AbstractDict, alt_str::AbstractString="")
+    # Lookup-table distortions affect only the selected WCS version's pixel pipeline.
     for key in keys(header)
         key isa AbstractString || continue
-        if is_lookup_distortion_keyword(key)
+        if is_lookup_distortion_keyword(key, alt_str)
             throw(ArgumentError(
                 "distortion lookup keyword $key is not implemented yet"
             ))

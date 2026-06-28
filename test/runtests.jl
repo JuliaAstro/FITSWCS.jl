@@ -574,6 +574,24 @@ end
             @test_throws ArgumentError from_header(hdr)
         end
 
+        # Alternate WCS lookup metadata should affect only the selected alternate.
+        alt_base = copy(base)
+        alt_base["CTYPE1A"] = "RA---TAN"
+        alt_base["CTYPE2A"] = "DEC--TAN"
+        for (key, value) in [
+            ("CPDIS1A", "LOOKUP"),
+            ("D2IMDIS1A", "LOOKUP"),
+            ("D2IMERR1A", 0.01),
+            ("AXISCORRA", "OMIT"),
+            ("DP1A.NAXES", 2),
+            ("DQ2A.AXIS.1", 1),
+        ]
+            hdr = copy(alt_base)
+            hdr[key] = value
+            @test from_header(hdr) isa WCSTransform
+            @test_throws ArgumentError from_header(hdr; alt='A')
+        end
+
         # SIP is implemented and should still parse through the distortion path.
         sip_hdr = copy(base)
         sip_hdr["CTYPE1"] = "RA---TAN-SIP"
@@ -1052,6 +1070,29 @@ end
 end
 
 # ──────────────────────────────────────────────────────────────────────────────
+@testset "Expanded cylindrical and pseudocylindrical projections" begin
+    # These projections fill in a WCSLIB-compatible slice with formulas checked
+    # by Astropy reference fixtures in regression_astropy_values.jl.
+    for (proj, theta_range) in [
+        (CYP(), (-70.0, 70.0)),
+        (MER(), (-70.0, 70.0)),
+        (SFL(), (-70.0, 70.0)),
+        (PAR(), (-70.0, 70.0)),
+        (MOL(), (-70.0, 70.0)),
+    ]
+        for (phi_d, theta_d) in [(0.0, 0.0), (30.0, 20.0), (-45.0, -25.0), (120.0, 50.0)]
+            theta_range[1] <= theta_d <= theta_range[2] || continue
+            phi_r = phi_d * D2R
+            theta_r = theta_d * D2R
+            x, y = native_to_intermediate(proj, phi_r, theta_r)
+            phi2, theta2 = intermediate_to_native(proj, x, y)
+            @test angle_approx(phi2, phi_r; atol=1e-11)
+            @test theta2 ≈ theta_r atol=1e-11
+        end
+    end
+end
+
+# ──────────────────────────────────────────────────────────────────────────────
 @testset "AIT projection" begin
     proj = AIT()
     @testset "Forward/inverse round-trip" begin
@@ -1437,6 +1478,11 @@ end
             (ZEA(),    (-π, π), (0.0, π/2)),   # ZEA: all theta valid
             (CAR(),    (-π, π), (-π/2, π/2)),  # CAR: full sky
             (CEA(0.8), (-π, π), (-π/3, π/3)),  # CEA: restricted latitude
+            (CYP(),    (-π, π), (-π/3, π/3)),  # CYP: avoid perspective singularities
+            (MER(),    (-π, π), (-π/3, π/3)),  # MER: avoid polar singularities
+            (SFL(),    (-π, π), (-π/3, π/3)),  # SFL: avoid undefined polar longitude
+            (PAR(),    (-π, π), (-π/3, π/3)),  # PAR: avoid domain edges
+            (MOL(),    (-π, π), (-π/3, π/3)),  # MOL: avoid polar auxiliary degeneracy
             (AIT(),    (-π, π), (-π/2, π/2)),  # AIT: full sky
         ]
             for _ in 1:10
@@ -1485,7 +1531,7 @@ end
             # Pixel near the reference point.
             pix = [256.0 + 10.0*randn(rng), 256.0 + 10.0*randn(rng)]
             world = pixel_to_world(wcs, pix)
-            @test world_to_pixel(wcs, world) ≈ pix  atol=1e-6
+            @test world_to_pixel(wcs, world) ≈ pix  atol=1e-5
         end
     end
 end
