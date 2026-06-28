@@ -1,5 +1,6 @@
 using Test
 using LinearAlgebra
+using Random
 using FITSWCS
 using FITSFiles
 using FITSIO
@@ -1292,6 +1293,201 @@ end
     hdu = FITSFiles.HDU(cards)
     hdu_wcs = from_header(hdu)
     @test pixel_to_world(hdu_wcs, [3.0]) ≈ [104.0]
+end
+
+# ──────────────────────────────────────────────────────────────────────────────
+@testset "Type stability" begin
+    # Plan Milestone 8: type stability where practical.
+    # pixel_to_world and world_to_pixel must return Vector{Float64} regardless of
+    # which code path is taken (linear, celestial, SIP).
+
+    hdr_lin = Dict(
+        "NAXIS"  => 2,
+        "CTYPE1" => "X", "CTYPE2" => "Y",
+        "CRPIX1" => 1.0, "CRPIX2" => 1.0,
+        "CRVAL1" => 0.0, "CRVAL2" => 0.0,
+        "CDELT1" => 1.0, "CDELT2" => 1.0,
+    )
+    hdr_tan = Dict(
+        "NAXIS"  => 2,
+        "CTYPE1" => "RA---TAN", "CTYPE2" => "DEC--TAN",
+        "CRPIX1" => 512.0,      "CRPIX2" => 512.0,
+        "CRVAL1" => 83.8221,    "CRVAL2" => -5.3911,
+        "CDELT1" => -2.7778e-4, "CDELT2" =>  2.7778e-4,
+    )
+    hdr_sip = Dict(
+        "NAXIS"   => 2,
+        "CTYPE1"  => "RA---TAN-SIP", "CTYPE2"  => "DEC--TAN-SIP",
+        "CRPIX1"  => 512.0,           "CRPIX2"  => 512.0,
+        "CRVAL1"  => 150.0,           "CRVAL2"  => 2.5,
+        "CDELT1"  => -2.7778e-4,      "CDELT2"  =>  2.7778e-4,
+        "A_ORDER" => 2,  "A_2_0" => 5.0e-6,  "A_0_2" => 2.0e-6,
+        "B_ORDER" => 2,  "B_2_0" => 1.0e-6,  "B_1_1" => 3.0e-6,
+    )
+    hdr_3d = Dict(
+        "NAXIS"  => 3,
+        "CTYPE1" => "RA---TAN", "CTYPE2" => "DEC--TAN", "CTYPE3" => "FREQ",
+        "CRPIX1" => 50.0,       "CRPIX2" => 50.0,        "CRPIX3" => 1.0,
+        "CRVAL1" => 10.0,       "CRVAL2" => 25.0,         "CRVAL3" => 1.42e9,
+        "CDELT1" => -0.01,      "CDELT2" =>  0.01,        "CDELT3" => 1.0e6,
+    )
+
+    wcs_lin = from_header(hdr_lin)
+    wcs_tan = from_header(hdr_tan)
+    wcs_sip = from_header(hdr_sip)
+    wcs_3d  = from_header(hdr_3d)
+
+    # from_header return type is stable.
+    @test @inferred(from_header(hdr_lin)) isa WCSTransform
+    @test @inferred(from_header(hdr_tan)) isa WCSTransform
+    @test @inferred(from_header(hdr_sip)) isa WCSTransform
+
+    # pixel_to_world return type is stable across linear, celestial, SIP, and 3D paths.
+    @test @inferred(pixel_to_world(wcs_lin, [2.0, 3.0]))  isa Vector{Float64}
+    @test @inferred(pixel_to_world(wcs_tan, [400.0, 300.0])) isa Vector{Float64}
+    @test @inferred(pixel_to_world(wcs_sip, [600.0, 500.0])) isa Vector{Float64}
+    @test @inferred(pixel_to_world(wcs_3d,  [40.0, 60.0, 5.0])) isa Vector{Float64}
+
+    # world_to_pixel return type is stable across the same paths.
+    w_lin = pixel_to_world(wcs_lin, [2.0, 3.0])
+    w_tan = pixel_to_world(wcs_tan, [400.0, 300.0])
+    w_sip = pixel_to_world(wcs_sip, [600.0, 500.0])
+    w_3d  = pixel_to_world(wcs_3d,  [40.0, 60.0, 5.0])
+    @test @inferred(world_to_pixel(wcs_lin, w_lin)) isa Vector{Float64}
+    @test @inferred(world_to_pixel(wcs_tan, w_tan)) isa Vector{Float64}
+    @test @inferred(world_to_pixel(wcs_sip, w_sip)) isa Vector{Float64}
+    @test @inferred(world_to_pixel(wcs_3d,  w_3d))  isa Vector{Float64}
+
+    # Batch (matrix) forms return Matrix{Float64}.
+    pix_mat = [1.0 512.0; 1.0 512.0]
+    @test @inferred(pixel_to_world(wcs_lin, pix_mat)) isa Matrix{Float64}
+    @test @inferred(pixel_to_world(wcs_tan, pix_mat)) isa Matrix{Float64}
+end
+
+# ──────────────────────────────────────────────────────────────────────────────
+@testset "Randomized property tests" begin
+    # Plan Testing Strategy section 5: use well-conditioned randomized WCS objects
+    # with a fixed RNG seed so results are deterministic.
+    rng = MersenneTwister(0x5f3759df)
+
+    @testset "Linear WCS round-trip (random)" begin
+        # Generate well-conditioned random linear WCS objects and verify that
+        # pixel → world → pixel recovers the original pixel within tolerance.
+        for _ in 1:20
+            naxis = rand(rng, 2:4)
+            crpix = 50.0 .+ 200.0 .* rand(rng, naxis)
+            crval = -180.0 .+ 360.0 .* rand(rng, naxis)
+            cdelt = 1e-3 .+ 1e-1 .* rand(rng, naxis)
+
+            hdr = Dict{String,Any}("NAXIS" => naxis)
+            for i in 1:naxis
+                hdr["CTYPE$i"] = string('A' - 1 + i)
+                hdr["CRPIX$i"] = crpix[i]
+                hdr["CRVAL$i"] = crval[i]
+                hdr["CDELT$i"] = cdelt[i]
+            end
+            wcs = from_header(hdr)
+
+            # Random pixel point well away from any edge effects.
+            pix = crpix .+ 10.0 .* (rand(rng, naxis) .- 0.5)
+            world = pixel_to_world(wcs, pix)
+            pix2 = world_to_pixel(wcs, world)
+            @test pix2 ≈ pix  atol=1e-8
+        end
+    end
+
+    @testset "PC matrix inverse consistency (random)" begin
+        # Random well-conditioned rotation matrices via QR decomposition of a random matrix.
+        # Verify CD = CDELT * PC elementwise, and that the transform round-trips.
+        for _ in 1:10
+            Q, _ = qr(randn(rng, 2, 2))
+            pc = Matrix(Q)   # orthogonal rotation matrix
+            cdelt = [-1e-4, 1e-4] .* (1.0 .+ 0.5 .* rand(rng, 2))
+
+            hdr = Dict{String,Any}(
+                "NAXIS"  => 2,
+                "CTYPE1" => "RA---TAN", "CTYPE2" => "DEC--TAN",
+                "CRPIX1" => 256.0,      "CRPIX2" => 256.0,
+                "CRVAL1" => 45.0,       "CRVAL2" => 20.0,
+                "CDELT1" => cdelt[1],   "CDELT2" => cdelt[2],
+                "PC1_1"  => pc[1,1],    "PC1_2"  => pc[1,2],
+                "PC2_1"  => pc[2,1],    "PC2_2"  => pc[2,2],
+            )
+            wcs = from_header(hdr)
+
+            # CD matrix should equal CDELT * PC elementwise (up to float round-off).
+            for i in 1:2, j in 1:2
+                @test wcs.cd[i,j] ≈ cdelt[i] * pc[i,j]  atol=1e-12
+            end
+
+            # Round-trip near reference pixel.
+            pix = [256.0 + randn(rng), 256.0 + randn(rng)]
+            @test world_to_pixel(wcs, pixel_to_world(wcs, pix)) ≈ pix  atol=1e-4
+        end
+    end
+
+    @testset "Projection inverse consistency (random, away from singularities)" begin
+        # Each projection should invert exactly for points well within its domain.
+        # Singularity-sensitive projections use restricted ranges.
+        for (proj, phi_range, theta_range) in [
+            (TAN(),    (-π, π), (0.1, π/2)),   # TAN: theta > 0
+            (SIN(),    (-π, π), (0.1, π/2)),   # SIN: R_theta <= 1
+            (STG(),    (-π, π), (0.1, π/2)),   # STG: theta > -90
+            (ARC(),    (-π, π), (0.0, π/2)),   # ARC: all theta valid
+            (ZEA(),    (-π, π), (0.0, π/2)),   # ZEA: all theta valid
+            (CAR(),    (-π, π), (-π/2, π/2)),  # CAR: full sky
+            (CEA(0.8), (-π, π), (-π/3, π/3)),  # CEA: restricted latitude
+            (AIT(),    (-π, π), (-π/2, π/2)),  # AIT: full sky
+        ]
+            for _ in 1:10
+                # Sample a point in the valid domain.
+                phi_lo, phi_hi = phi_range
+                th_lo, th_hi   = theta_range
+                phi   = phi_lo + (phi_hi - phi_lo) * rand(rng)
+                theta = th_lo  + (th_hi  - th_lo)  * rand(rng)
+
+                # SIN projection: ensure the point is inside the unit circle.
+                if proj isa SIN
+                    while true
+                        Rth = sqrt(cos(theta)^2)   # = |cos(theta)|
+                        Rth < 0.99 && break
+                        theta = th_lo + (th_hi - th_lo) * rand(rng)
+                    end
+                end
+
+                x, y = FITSWCS.native_to_intermediate(proj, phi, theta)
+                phi2, theta2 = FITSWCS.intermediate_to_native(proj, x, y)
+
+                # Angles are equal modulo 2π.
+                @test angle_approx(phi2, phi;   atol=1e-10)
+                @test theta2 ≈ theta  atol=1e-10
+            end
+        end
+    end
+
+    @testset "TAN celestial WCS round-trip (random)" begin
+        # Random TAN celestial WCS with well-conditioned CDELT and near-pole-free
+        # CRVAL should round-trip to within floating-point projection tolerance.
+        for _ in 1:15
+            crval1 = -170.0 + 340.0 * rand(rng)      # RA away from 0/360 boundary
+            crval2 = -60.0  + 120.0 * rand(rng)      # Dec away from ±90
+            cdelt  = 1e-4   + 9e-4  * rand(rng)      # 0.1–1 arcsec/pixel range
+
+            hdr = Dict{String,Any}(
+                "NAXIS"  => 2,
+                "CTYPE1" => "RA---TAN", "CTYPE2" => "DEC--TAN",
+                "CRPIX1" => 256.0,      "CRPIX2" => 256.0,
+                "CRVAL1" => crval1,     "CRVAL2" => crval2,
+                "CDELT1" => -cdelt,     "CDELT2" => cdelt,
+            )
+            wcs = from_header(hdr)
+
+            # Pixel near the reference point.
+            pix = [256.0 + 10.0*randn(rng), 256.0 + 10.0*randn(rng)]
+            world = pixel_to_world(wcs, pix)
+            @test world_to_pixel(wcs, world) ≈ pix  atol=1e-6
+        end
+    end
 end
 
 end  # @testset "FITSWCS"
