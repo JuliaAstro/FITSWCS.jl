@@ -11,15 +11,6 @@ in **degrees**.  This matches the FITS WCS Paper II convention.
   FITS", Astronomy & Astrophysics, 395, 1077–1122.  (Paper II)
 """
 
-# @inline _float_type(::Type{T}) where {T<:AbstractFloat} = T
-# @inline _float_type(::Type{T}) where {T<:Real} = Float64
-# @inline _promote_float_type(x::Real) = _float_type(typeof(x))
-@inline _promote_float_type(x::Real) = float(typeof(x))
-@inline _promote_float_type(x::Real, y::Real) =
-    promote_type(_promote_float_type(x), _promote_float_type(y))
-@inline _halfpi(::Type{T}) where {T<:AbstractFloat} = T(π / 2)
-@inline _pi(::Type{T}) where {T<:AbstractFloat} = T(π)
-
 # ──────────────────────────────────────────────────────────────────────────────
 # Shared zenithal utilities
 # ──────────────────────────────────────────────────────────────────────────────
