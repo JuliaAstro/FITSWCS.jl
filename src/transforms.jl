@@ -27,12 +27,41 @@ For purely linear axes the world coordinates are in whatever units the FITS
 header specifies via `CDELT` and `CRVAL`.
 """
 
-const _D2R_t = π / 180.0
-const _R2D_t = 180.0 / π
-
 # ──────────────────────────────────────────────────────────────────────────────
 # Single-coordinate transforms
 # ──────────────────────────────────────────────────────────────────────────────
+
+@inline _coordinate_float_type(::AbstractVector{T}) where {T<:Real} = _float_type(T)
+
+@inline _coordinate_float_type(coords::Tuple{Vararg{Real}}) = _promote_float_type(coords...)
+
+function _coordinate_vector(coords::Tuple{Vararg{Real}})
+    # Preserve the tuple's promoted floating-point precision when materializing it.
+    T = _coordinate_float_type(coords)
+    return collect(T, coords)
+end
+
+function _world_from_intermediate(wcs::WCSTransform, intermediate::AbstractVector, ::Type{T}) where {T<:AbstractFloat}
+    world = Vector{T}(undef, wcs.naxis)
+
+    # Add CRVAL axis-by-axis so WCS metadata is converted to the coordinate type.
+    for i in 1:wcs.naxis
+        world[i] = T(wcs.crval[i]) + T(intermediate[i])
+    end
+
+    return world
+end
+
+function _world_offsets(wcs::WCSTransform, world::AbstractVector, ::Type{T}) where {T<:AbstractFloat}
+    intermediate = Vector{T}(undef, wcs.naxis)
+
+    # Subtract CRVAL axis-by-axis to avoid broadcast promotion through WCS storage.
+    for i in 1:wcs.naxis
+        intermediate[i] = T(world[i]) - T(wcs.crval[i])
+    end
+
+    return intermediate
+end
 
 """
     pixel_to_world(wcs, pixel) -> world
@@ -40,7 +69,7 @@ const _R2D_t = 180.0 / π
 Convert a single FITS pixel coordinate to world coordinates.
 
 `pixel` must be a length-`wcs.naxis` vector (or tuple) of pixel positions.
-Returns a length-`wcs.naxis` `Vector{Float64}` of world coordinates.
+Returns a length-`wcs.naxis` floating-point vector of world coordinates.
 
 For purely linear WCS (no celestial projection) the result is:
     world[i] = CRVAL[i] + Σⱼ CD[i,j] * (pixel[j] - CRPIX[j])
@@ -51,6 +80,7 @@ rotation) is applied.
 function pixel_to_world(wcs::WCSTransform, pixel::AbstractVector)
     length(pixel) == wcs.naxis ||
         throw(DimensionMismatch("pixel has length $(length(pixel)), expected $(wcs.naxis)"))
+    T = _coordinate_float_type(pixel)
 
     # Step 1: Linear transform → intermediate world coordinates (degrees)
     x = pixel_to_intermediate(wcs, pixel)  # length naxis
@@ -59,36 +89,37 @@ function pixel_to_world(wcs::WCSTransform, pixel::AbstractVector)
     if wcs.projection !== nothing
         lon_idx = wcs.lon_axis
         lat_idx = wcs.lat_axis
-
-        x_lon = x[lon_idx]   # degrees
-        x_lat = x[lat_idx]   # degrees
+        x_lon = T(x[lon_idx])   # degrees
+        x_lat = T(x[lat_idx])   # degrees
 
         # Deproject: (x, y) → (φ, θ) in radians
         phi, theta = intermediate_to_native(wcs.projection, x_lon, x_lat)
 
         # Spherical rotation: (φ, θ) → (α, δ) in radians
         # alpha_p, delta_p are the celestial coords of the native north pole.
-        alpha_p = wcs.alpha_p * _D2R_t
-        delta_p = wcs.delta_p * _D2R_t
-        phi_p   = wcs.lonpole * _D2R_t
+        d2r = deg2rad(one(T))
+        r2d = inv(d2r)
+        alpha_p = T(wcs.alpha_p) * d2r
+        delta_p = T(wcs.delta_p) * d2r
+        phi_p = T(wcs.lonpole) * d2r
 
         alpha, delta = native_to_celestial(phi, theta, alpha_p, delta_p, phi_p)
 
         # Build world vector: start from the intermediate coords, then overwrite
         # the celestial axes with the spherical-rotation results.
-        world = wcs.crval .+ x
-        world[lon_idx] = mod(alpha * _R2D_t, 360.0)
-        world[lat_idx] = delta * _R2D_t
+        world = _world_from_intermediate(wcs, x, T)
+        world[lon_idx] = mod(alpha * r2d, T(360))
+        world[lat_idx] = delta * r2d
         return world
     else
         # Purely linear: world = CRVAL + CD*(pixel - CRPIX)
-        return wcs.crval .+ x
+        return _world_from_intermediate(wcs, x, T)
     end
 end
 
 # Convenience: accept tuples and static-array-likes
-pixel_to_world(wcs::WCSTransform, pixel::Tuple) =
-    pixel_to_world(wcs, collect(Float64, pixel))
+pixel_to_world(wcs::WCSTransform, pixel::Tuple{Vararg{Real}}) =
+    pixel_to_world(wcs, _coordinate_vector(pixel))
 
 """
     world_to_pixel(wcs, world) -> pixel
@@ -97,11 +128,12 @@ Convert world coordinates to FITS pixel coordinates.
 
 `world` must be a length-`wcs.naxis` vector (or tuple) of world positions
 in the same units as `CRVAL` (degrees for celestial axes).
-Returns a length-`wcs.naxis` `Vector{Float64}` of 1-based pixel coordinates.
+Returns a length-`wcs.naxis` floating-point vector of 1-based pixel coordinates.
 """
 function world_to_pixel(wcs::WCSTransform, world::AbstractVector)
     length(world) == wcs.naxis ||
         throw(DimensionMismatch("world has length $(length(world)), expected $(wcs.naxis)"))
+    T = _coordinate_float_type(world)
 
     if wcs.projection !== nothing
         lon_idx = wcs.lon_axis
@@ -109,20 +141,21 @@ function world_to_pixel(wcs::WCSTransform, world::AbstractVector)
 
         # The fiducial celestial point is defined to have zero intermediate
         # coordinates; handling it directly avoids pole cancellation.
-        lon_delta = mod(world[lon_idx] - wcs.crval[lon_idx] + 180.0, 360.0) - 180.0
-        if abs(lon_delta) <= 1e-10 && abs(world[lat_idx] - wcs.crval[lat_idx]) <= 1e-10
-            x = world .- wcs.crval
-            x[lon_idx] = 0.0
-            x[lat_idx] = 0.0
+        lon_delta = mod(T(world[lon_idx]) - T(wcs.crval[lon_idx]) + T(180), T(360)) - T(180)
+        if abs(lon_delta) <= T(1e-10) && abs(T(world[lat_idx]) - T(wcs.crval[lat_idx])) <= T(1e-10)
+            x = _world_offsets(wcs, world, T)
+            x[lon_idx] = zero(T)
+            x[lat_idx] = zero(T)
             return intermediate_to_pixel(wcs, x)
         end
 
-        alpha_p = wcs.alpha_p * _D2R_t
-        delta_p = wcs.delta_p * _D2R_t
-        phi_p   = wcs.lonpole * _D2R_t
+        d2r = deg2rad(one(T))
+        alpha_p = T(wcs.alpha_p) * d2r
+        delta_p = T(wcs.delta_p) * d2r
+        phi_p = T(wcs.lonpole) * d2r
 
-        alpha = world[lon_idx] * _D2R_t
-        delta = world[lat_idx] * _D2R_t
+        alpha = T(world[lon_idx]) * d2r
+        delta = T(world[lat_idx]) * d2r
 
         # Spherical rotation: (α, δ) → (φ, θ)
         phi, theta = celestial_to_native(alpha, delta, alpha_p, delta_p, phi_p)
@@ -132,19 +165,19 @@ function world_to_pixel(wcs::WCSTransform, world::AbstractVector)
 
         # Build intermediate coordinate vector
         # Non-celestial axes: x_i = world_i - crval_i (trivial linear axes)
-        x = world .- wcs.crval
-        x[lon_idx] = x_lon
-        x[lat_idx] = x_lat
+        x = _world_offsets(wcs, world, T)
+        x[lon_idx] = T(x_lon)
+        x[lat_idx] = T(x_lat)
 
         return intermediate_to_pixel(wcs, x)
     else
-        x = world .- wcs.crval
+        x = _world_offsets(wcs, world, T)
         return intermediate_to_pixel(wcs, x)
     end
 end
 
-world_to_pixel(wcs::WCSTransform, world::Tuple) =
-    world_to_pixel(wcs, collect(Float64, world))
+world_to_pixel(wcs::WCSTransform, world::Tuple{Vararg{Real}}) =
+    world_to_pixel(wcs, _coordinate_vector(world))
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Batch transforms
@@ -156,13 +189,13 @@ world_to_pixel(wcs::WCSTransform, world::Tuple) =
 Batch pixel-to-world transform.
 
 `pixels` must be an `naxis × N` matrix where each column is one pixel
-coordinate.  Returns an `naxis × N` matrix of world coordinates.
+coordinate.  Returns an `naxis × N` floating-point matrix of world coordinates.
 """
 function pixel_to_world(wcs::WCSTransform, pixels::AbstractMatrix)
     naxis, N = size(pixels)
     naxis == wcs.naxis ||
         throw(DimensionMismatch("pixels has $(naxis) rows, expected $(wcs.naxis)"))
-    result = similar(pixels, Float64, naxis, N)
+    result = similar(pixels, _float_type(eltype(pixels)), naxis, N)
     for k in 1:N
         result[:, k] = pixel_to_world(wcs, view(pixels, :, k))
     end
@@ -180,13 +213,13 @@ end
 Batch world-to-pixel transform.
 
 `worlds` must be an `naxis × N` matrix where each column is one world
-coordinate.  Returns an `naxis × N` matrix of pixel coordinates.
+coordinate.  Returns an `naxis × N` floating-point matrix of pixel coordinates.
 """
 function world_to_pixel(wcs::WCSTransform, worlds::AbstractMatrix)
     naxis, N = size(worlds)
     naxis == wcs.naxis ||
         throw(DimensionMismatch("worlds has $(naxis) rows, expected $(wcs.naxis)"))
-    result = similar(worlds, Float64, naxis, N)
+    result = similar(worlds, _float_type(eltype(worlds)), naxis, N)
     for k in 1:N
         result[:, k] = world_to_pixel(wcs, view(worlds, :, k))
     end

@@ -44,6 +44,7 @@ using LinearAlgebra: I, \
 
 include("types.jl")
 include("units.jl")
+include("utilities.jl")
 include("projections.jl")
 include("celestial.jl")
 include("distortion.jl")
