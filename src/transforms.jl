@@ -35,10 +35,10 @@ header specifies via `CDELT` and `CRVAL`.
 
 @inline _coordinate_float_type(coords::Tuple{Vararg{Real}}) = _promote_float_type(coords...)
 
-function _coordinate_vector(coords::Tuple{Vararg{Real}})
-    # Preserve the tuple's promoted floating-point precision when materializing it.
+function _coordinate_vector(coords::Tuple{Vararg{Real,N}}) where {N}
+    # Preserve tuple precision and length when materializing scalar arguments.
     T = _coordinate_float_type(coords)
-    return collect(T, coords)
+    return SVector{N,T}(coords)
 end
 
 function _world_from_intermediate(wcs::WCSTransform, intermediate::AbstractVector, ::Type{T}) where {T<:AbstractFloat}
@@ -52,6 +52,11 @@ function _world_from_intermediate(wcs::WCSTransform, intermediate::AbstractVecto
     return world
 end
 
+function _world_from_intermediate(wcs::WCSTransform{N}, intermediate::StaticVector{N}, ::Type{T}) where {N,T<:AbstractFloat}
+    # Keep static intermediate coordinates static in the public result.
+    return convert(SVector{N,T}, wcs.crval) .+ convert(SVector{N,T}, intermediate)
+end
+
 function _world_offsets(wcs::WCSTransform, world::AbstractVector, ::Type{T}) where {T<:AbstractFloat}
     intermediate = Vector{T}(undef, wcs.naxis)
 
@@ -61,6 +66,23 @@ function _world_offsets(wcs::WCSTransform, world::AbstractVector, ::Type{T}) whe
     end
 
     return intermediate
+end
+
+function _world_offsets(wcs::WCSTransform{N}, world::StaticVector{N}, ::Type{T}) where {N,T<:AbstractFloat}
+    # Keep static world coordinates static before applying the inverse linear map.
+    return SVector{N,T}(ntuple(i -> T(world[i]) - T(wcs.crval[i]), N))
+end
+
+function _set_celestial_axes!(coords::AbstractVector, lon_idx::Int, lat_idx::Int, lon, lat)
+    # Mutable coordinate storage can be updated in place.
+    coords[lon_idx] = lon
+    coords[lat_idx] = lat
+    return coords
+end
+
+function _set_celestial_axes!(coords::StaticVector{N,T}, lon_idx::Int, lat_idx::Int, lon, lat) where {N,T}
+    # Immutable static coordinates are rebuilt with the celestial axes replaced.
+    return SVector{N,T}(ntuple(i -> i == lon_idx ? T(lon) : i == lat_idx ? T(lat) : coords[i], N))
 end
 
 """
@@ -89,8 +111,8 @@ function pixel_to_world(wcs::WCSTransform, pixel::AbstractVector)
     if wcs.projection !== nothing
         lon_idx = wcs.lon_axis
         lat_idx = wcs.lat_axis
-        x_lon = T(x[lon_idx])   # degrees
-        x_lat = T(x[lat_idx])   # degrees
+        x_lon = x[lon_idx]   # degrees
+        x_lat = x[lat_idx]   # degrees
 
         # Deproject: (x, y) → (φ, θ) in radians
         phi, theta = intermediate_to_native(wcs.projection, x_lon, x_lat)
@@ -104,13 +126,10 @@ function pixel_to_world(wcs::WCSTransform, pixel::AbstractVector)
         phi_p = T(wcs.lonpole) * d2r
 
         alpha, delta = native_to_celestial(phi, theta, alpha_p, delta_p, phi_p)
-
         # Build world vector: start from the intermediate coords, then overwrite
         # the celestial axes with the spherical-rotation results.
         world = _world_from_intermediate(wcs, x, T)
-        world[lon_idx] = mod(alpha * r2d, T(360))
-        world[lat_idx] = delta * r2d
-        return world
+        return _set_celestial_axes!(world, lon_idx, lat_idx, mod(alpha * r2d, T(360)), delta * r2d)
     else
         # Purely linear: world = CRVAL + CD*(pixel - CRPIX)
         return _world_from_intermediate(wcs, x, T)
@@ -144,8 +163,7 @@ function world_to_pixel(wcs::WCSTransform, world::AbstractVector)
         lon_delta = mod(T(world[lon_idx]) - T(wcs.crval[lon_idx]) + T(180), T(360)) - T(180)
         if abs(lon_delta) <= T(1e-10) && abs(T(world[lat_idx]) - T(wcs.crval[lat_idx])) <= T(1e-10)
             x = _world_offsets(wcs, world, T)
-            x[lon_idx] = zero(T)
-            x[lat_idx] = zero(T)
+            x = _set_celestial_axes!(x, lon_idx, lat_idx, zero(T), zero(T))
             return intermediate_to_pixel(wcs, x)
         end
 
@@ -166,8 +184,7 @@ function world_to_pixel(wcs::WCSTransform, world::AbstractVector)
         # Build intermediate coordinate vector
         # Non-celestial axes: x_i = world_i - crval_i (trivial linear axes)
         x = _world_offsets(wcs, world, T)
-        x[lon_idx] = T(x_lon)
-        x[lat_idx] = T(x_lat)
+        x = _set_celestial_axes!(x, lon_idx, lat_idx, T(x_lon), T(x_lat))
 
         return intermediate_to_pixel(wcs, x)
     else
@@ -184,7 +201,7 @@ world_to_pixel(wcs::WCSTransform, world::Tuple{Vararg{Real}}) =
 # ──────────────────────────────────────────────────────────────────────────────
 
 """
-    pixel_to_world(wcs, pixels::AbstractMatrix) -> Matrix{Float64}
+    pixel_to_world(wcs, pixels::AbstractMatrix) -> AbstractMatrix
 
 Batch pixel-to-world transform.
 
@@ -208,7 +225,7 @@ function pixel_to_world(wcs::WCSTransform, pixels::AbstractVector{<:AbstractVect
 end
 
 """
-    world_to_pixel(wcs, worlds::AbstractMatrix) -> Matrix{Float64}
+    world_to_pixel(wcs, worlds::AbstractMatrix) -> AbstractMatrix
 
 Batch world-to-pixel transform.
 

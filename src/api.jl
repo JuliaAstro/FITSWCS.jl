@@ -111,8 +111,8 @@ function pix_to_world(wcs::WCSTransform, pixels::Union{AbstractVector, AbstractM
 end
 
 function pix_to_world(wcs::WCSTransform, coords::Real...)
-    # Collect scalar coordinate arguments into the vector form expected internally.
-    return pixel_to_world(wcs, collect(Float64, coords))
+    # Materialize scalar coordinate arguments as static coordinates.
+    return pixel_to_world(wcs, _coordinate_vector(coords))
 end
 
 """
@@ -143,8 +143,8 @@ function world_to_pix(wcs::WCSTransform, worlds::Union{AbstractVector, AbstractM
 end
 
 function world_to_pix(wcs::WCSTransform, coords::Real...)
-    # Collect scalar coordinate arguments into the vector form expected internally.
-    return world_to_pixel(wcs, collect(Float64, coords))
+    # Materialize scalar coordinate arguments as static coordinates.
+    return world_to_pixel(wcs, _coordinate_vector(coords))
 end
 
 """

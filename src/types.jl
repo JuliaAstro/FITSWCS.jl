@@ -157,7 +157,7 @@ The optional inverse coefficients `ap` and `bp` map focal/image-plane
 coordinates back to detector pixel coordinates.
 """
 struct SIPDistortion
-    crpix::Vector{Float64}
+    crpix::SVector{2,Float64}
     a::Matrix{Float64}
     b::Matrix{Float64}
     ap::Union{Nothing, Matrix{Float64}}
@@ -203,19 +203,19 @@ array indices the values are numerically identical; no offset is required.
 - `lon_axis`   – 1-based index of the longitude axis; 0 if no celestial axes.
 - `lat_axis`   – 1-based index of the latitude axis; 0 if no celestial axes.
 """
-struct WCSTransform
+struct WCSTransform{N,L,P<:Union{Nothing,AbstractProjection},S<:Union{Nothing,SIPDistortion}}
     naxis::Int
-    crpix::Vector{Float64}
-    crval::Vector{Float64}
-    cd::Matrix{Float64}       # naxis × naxis
+    crpix::SVector{N,Float64}
+    crval::SVector{N,Float64}
+    cd::SMatrix{N,N,Float64,L}       # naxis × naxis
     ctype::Vector{String}
     cunit::Vector{String}
     lonpole::Float64          # degrees; φₚ (Paper II)
     latpole::Float64          # degrees; used during construction
     alpha_p::Float64          # degrees; celestial lon of native N pole
     delta_p::Float64          # degrees; celestial lat of native N pole
-    projection::Union{Nothing, AbstractProjection}
-    sip::Union{Nothing, SIPDistortion}
+    projection::P
+    sip::S
     lon_axis::Int             # 1-based index; 0 = no celestial lon axis
     lat_axis::Int             # 1-based index; 0 = no celestial lat axis
 end
