@@ -72,6 +72,8 @@ header linear transform.
 The implemented celestial projection codes are:
 
 - `TAN` gnomonic
+- `AZP` zenithal perspective, default parameter form
+- `SZP` slant zenithal perspective, default parameter form
 - `SIN` orthographic, including slant parameters
 - `STG` stereographic
 - `ARC` zenithal equidistant
@@ -83,6 +85,7 @@ The implemented celestial projection codes are:
 - `SFL` Sanson-Flamsteed
 - `PAR` parabolic
 - `MOL` Mollweide
+- `PCO` polyconic
 - `AIT` Hammer-Aitoff
 
 Unknown projection codes can be parsed, but coordinate transforms throw an

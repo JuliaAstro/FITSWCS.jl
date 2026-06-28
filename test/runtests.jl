@@ -1093,6 +1093,116 @@ end
 end
 
 # ──────────────────────────────────────────────────────────────────────────────
+@testset "Additional WCSLIB projection defaults" begin
+    # AZP and SZP default to central perspective; PCO exercises the WCSLIB inverse.
+    for (proj, samples) in [
+        (AZP(), [(0.0, 80.0), (30.0, 60.0), (-45.0, 70.0)]),
+        (SZP(), [(0.0, 80.0), (30.0, 60.0), (-45.0, 70.0)]),
+        (PCO(), [(0.0, 80.0), (30.0, 60.0), (-45.0, -20.0), (120.0, 30.0),
+                 (155.95791089690434, 39.71570316255433)]),
+    ]
+        for (phi_d, theta_d) in samples
+            phi_r = phi_d * D2R
+            theta_r = theta_d * D2R
+            x, y = native_to_intermediate(proj, phi_r, theta_r)
+            phi2, theta2 = intermediate_to_native(proj, x, y)
+            @test angle_approx(phi2, phi_r; atol=1e-11)
+            @test theta2 ≈ theta_r atol=1e-11
+        end
+    end
+
+    # Non-default AZP/SZP parameters remain deferred rather than silently ignored.
+    @test_throws ArgumentError from_header(Dict(
+        "NAXIS" => 2, "CTYPE1" => "RA---AZP", "CTYPE2" => "DEC--AZP",
+        "PV2_1" => 1.0,
+    ))
+    @test_throws ArgumentError from_header(Dict(
+        "NAXIS" => 2, "CTYPE1" => "RA---SZP", "CTYPE2" => "DEC--SZP",
+        "PV2_3" => 45.0,
+    ))
+end
+
+# ──────────────────────────────────────────────────────────────────────────────
+@testset "WCSLIB projection edge semantics" begin
+    # WCSLIB defines deterministic native coordinates at otherwise ambiguous
+    # projection centers and boundaries; these cases guard those conventions.
+    for proj in (AZP(), SZP(), TAN(), STG(), ARC(), ZEA())
+        phi, theta = intermediate_to_native(proj, 0.0, 0.0)
+        @test phi == 0.0
+        @test theta ≈ π/2 atol=1e-12
+    end
+
+    @testset "SIN center longitude" begin
+        # Standard and slant SIN both use phi=0 at the projection center.
+        for proj in (SIN(), SIN(0.1, -0.05))
+            phi, theta = intermediate_to_native(proj, 0.0, 0.0)
+            @test phi == 0.0
+            @test theta ≈ π/2 atol=1e-12
+        end
+
+        phi32, theta32 = intermediate_to_native(SIN(), Float32(0), Float32(0))
+        @test phi32 isa Float32
+        @test theta32 isa Float32
+    end
+
+    @testset "PAR projected pole" begin
+        # PAR accepts the projected pole only when x is effectively zero.
+        phi, theta = intermediate_to_native(PAR(), 0.0, 90.0)
+        @test phi == 0.0
+        @test theta ≈ π/2 atol=1e-12
+        @test_throws ErrorException intermediate_to_native(PAR(), 1e-8, 90.0)
+    end
+
+    @testset "MOL projected pole" begin
+        # MOL also treats nonzero x at the projected pole as outside the valid map.
+        ypole = sqrt(2.0) * R2D
+        phi, theta = intermediate_to_native(MOL(), 0.0, ypole)
+        @test phi == 0.0
+        @test theta ≈ π/2 atol=1e-12
+        @test_throws ErrorException intermediate_to_native(MOL(), 1e-8, ypole)
+    end
+
+    @testset "Boundary tolerance" begin
+        # WCSLIB allows tiny floating-point overshoot at closed projection boundaries.
+        _, zea_theta = intermediate_to_native(ZEA(), 2.0 * R2D * (1.0 + 1e-13), 0.0)
+        @test zea_theta ≈ -π/2 atol=1e-12
+
+        _, cea_theta = intermediate_to_native(CEA(0.75), 0.0, (R2D / 0.75) * (1.0 + 5e-14))
+        @test cea_theta ≈ π/2 atol=1e-12
+
+        ait_phi, ait_theta = intermediate_to_native(AIT(), 2.0 * sqrt(2.0) * R2D * (1.0 + 1e-14), 0.0)
+        @test angle_approx(ait_phi, π; atol=1e-10)
+        @test ait_theta ≈ 0.0 atol=1e-12
+    end
+
+    @testset "Non-default CYP parameters" begin
+        # CYP PV parameters should parse from the latitude axis and round-trip.
+        hdr = Dict(
+            "NAXIS" => 2, "CTYPE1" => "RA---CYP", "CTYPE2" => "DEC--CYP",
+            "PV2_1" => 0.75, "PV2_2" => 1.5,
+        )
+        @test from_header(hdr).projection == CYP(0.75, 1.5)
+
+        proj = CYP(0.75, 1.5)
+        phi_r = 30.0 * D2R
+        theta_r = 20.0 * D2R
+        x, y = native_to_intermediate(proj, phi_r, theta_r)
+        phi2, theta2 = intermediate_to_native(proj, x, y)
+        @test angle_approx(phi2, phi_r; atol=1e-12)
+        @test theta2 ≈ theta_r atol=1e-12
+    end
+
+    @testset "Float32 edge precision" begin
+        # Projection edge paths should not silently promote Float32 inputs.
+        for proj in (ZEA(), CEA(0.75), PAR(), MOL(), PCO(), AIT())
+            phi, theta = intermediate_to_native(proj, Float32(0), Float32(0))
+            @test phi isa Float32
+            @test theta isa Float32
+        end
+    end
+end
+
+# ──────────────────────────────────────────────────────────────────────────────
 @testset "AIT projection" begin
     proj = AIT()
     @testset "Forward/inverse round-trip" begin
@@ -1471,6 +1581,8 @@ end
         # Each projection should invert exactly for points well within its domain.
         # Singularity-sensitive projections use restricted ranges.
         for (proj, phi_range, theta_range) in [
+            (AZP(),    (-π, π), (0.1, π/2)),   # AZP default: central perspective
+            (SZP(),    (-π, π), (0.1, π/2)),   # SZP default: central perspective
             (TAN(),    (-π, π), (0.1, π/2)),   # TAN: theta > 0
             (SIN(),    (-π, π), (0.1, π/2)),   # SIN: R_theta <= 1
             (STG(),    (-π, π), (0.1, π/2)),   # STG: theta > -90
@@ -1483,6 +1595,7 @@ end
             (SFL(),    (-π, π), (-π/3, π/3)),  # SFL: avoid undefined polar longitude
             (PAR(),    (-π, π), (-π/3, π/3)),  # PAR: avoid domain edges
             (MOL(),    (-π, π), (-π/3, π/3)),  # MOL: avoid polar auxiliary degeneracy
+            (PCO(),    (-π, π), (-π/3, π/3)),      # PCO: avoid polar branch degeneracy
             (AIT(),    (-π, π), (-π/2, π/2)),  # AIT: full sky
         ]
             for _ in 1:10

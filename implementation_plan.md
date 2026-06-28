@@ -604,8 +604,20 @@ Implementation notes:
   solves with clear convergence failures for polynomial/implicit projections.
 * Add Astropy/WCSLIB-generated absolute-value regression tests, not just
   round-trip tests.
+* Preserve numeric precision through projection methods: use promotion from the
+  numeric arguments and typed constants so `Float32` inputs can produce
+  `Float32` outputs without doing the internal work in `Float64`.
 * Keep high-risk projections such as `ZPN`, `AIR`, conics, quadcube, and
   HEALPix in small independently reviewed slices.
+
+Progress notes:
+
+* Implemented and Astropy-checked: `CYP`, `MER`, `SFL`, `PAR`, `MOL`, and
+  `PCO`.
+* Implemented default-parameter forms only: `AZP` and `SZP`; non-default PV
+  parameters should be implemented in a later slice rather than ignored.
+* Remaining high-risk codes: `ZPN`, `AIR`, `COP`, `COE`, `COD`, `COO`, `BON`,
+  `TSC`, `CSC`, `QSC`, `HPX`, and `XPH`.
 
 ### Task B: Implement Paper IV Distortion Lookup Tables
 
