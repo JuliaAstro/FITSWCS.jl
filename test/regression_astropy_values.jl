@@ -85,6 +85,60 @@ end
     end
 end
 
+@testset "Additional WCSLIB projection codes (Astropy comparison)" begin
+    # Validate the first projection-expansion slice against stored Astropy
+    # values so the new formulas are checked outside round-trip symmetry.
+    refs = Dict(
+        "CYP" => [
+            ([101.0, 81.0], [30.0, -10.0]),
+            ([110.0, 90.0], [25.493309718808764, -5.471594360589324]),
+            ([80.0, 60.0], [41.01485018705852, -20.29598959498479]),
+            ([120.0, 70.0], [20.19064257183051, -15.35488544402523]),
+        ],
+        "MER" => [
+            ([101.0, 81.0], [30.0, -10.0]),
+            ([110.0, 90.0], [25.493277982512954, -5.473902349204117]),
+            ([80.0, 60.0], [41.01380556079776, -20.266961601401988]),
+            ([120.0, 70.0], [20.190772321298176, -15.350677488836727]),
+        ],
+        "SFL" => [
+            ([101.0, 81.0], [30.0, -10.0]),
+            ([110.0, 90.0], [25.479407365355677, -5.469093373275083]),
+            ([80.0, 60.0], [41.203287790375555, -20.319228679179997]),
+            ([120.0, 70.0], [20.14517683081226, -15.357798258796976]),
+        ],
+        "PAR" => [
+            ([101.0, 81.0], [30.0, -10.0]),
+            ([110.0, 90.0], [25.479257388932428, -5.671479180738607]),
+            ([80.0, 60.0], [41.150731126139675, -19.853100979351957]),
+            ([120.0, 70.0], [20.1614031505245, -15.111086198565213]),
+        ],
+        "MOL" => [
+            ([101.0, 81.0], [30.0, -10.0]),
+            ([110.0, 90.0], [24.979836656715705, -5.9092224081239495]),
+            ([80.0, 60.0], [42.29667953176584, -19.25145201212617]),
+            ([120.0, 70.0], [19.098842743047673, -14.779881183544061]),
+        ],
+    )
+
+    for code in ("CYP", "MER", "SFL", "PAR", "MOL")
+        hdr = Dict(
+            "NAXIS"  => 2,
+            "CTYPE1" => "RA---$code", "CTYPE2" => "DEC--$code",
+            "CRPIX1" => 101.0,        "CRPIX2" => 81.0,
+            "CRVAL1" => 30.0,         "CRVAL2" => -10.0,
+            "CDELT1" => -0.5,         "CDELT2" => 0.5,
+        )
+        wcs = from_header(hdr)
+
+        for (pix, world_ref) in refs[code]
+            world = pixel_to_world(wcs, pix)
+            @test world ≈ world_ref atol=1e-10
+            @test world_to_pixel(wcs, world_ref) ≈ pix atol=1e-7
+        end
+    end
+end
+
 @testset "Celestial CUNIT arcsec (Astropy comparison)" begin
     # Astropy normalizes celestial arcsecond units to degree-valued world
     # coordinates; FITSWCS should expose the same public convention.

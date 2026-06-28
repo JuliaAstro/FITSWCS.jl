@@ -78,6 +78,11 @@ native_theta0(::ARC) = 90.0
 native_theta0(::ZEA) = 90.0
 native_theta0(::CAR) = 0.0
 native_theta0(::CEA) = 0.0
+native_theta0(::CYP) = 0.0
+native_theta0(::MER) = 0.0
+native_theta0(::SFL) = 0.0
+native_theta0(::PAR) = 0.0
+native_theta0(::MOL) = 0.0
 native_theta0(::AIT) = 0.0
 native_theta0(::UnknownProjection) = 90.0
 

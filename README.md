@@ -78,6 +78,11 @@ The implemented celestial projection codes are:
 - `ZEA` zenithal equal area
 - `CAR` plate carree
 - `CEA` cylindrical equal area
+- `CYP` cylindrical perspective
+- `MER` Mercator
+- `SFL` Sanson-Flamsteed
+- `PAR` parabolic
+- `MOL` Mollweide
 - `AIT` Hammer-Aitoff
 
 Unknown projection codes can be parsed, but coordinate transforms throw an
