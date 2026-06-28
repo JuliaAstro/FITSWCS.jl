@@ -200,6 +200,79 @@ world_to_pixel(wcs::WCSTransform, world::Tuple{Vararg{Real}}) =
 # Batch transforms
 # ──────────────────────────────────────────────────────────────────────────────
 
+@inline _typed_matrix(::Type{T}, values::AbstractMatrix{T}) where {T<:AbstractFloat} = values
+@inline _typed_matrix(::Type{T}, values::AbstractMatrix) where {T<:AbstractFloat} = Matrix{T}(values)
+
+function _pixel_to_intermediate_batch(wcs::WCSTransform{A}, pixels::AbstractMatrix, ::Type{T}) where {A,T<:AbstractFloat}
+    _, ncoords = size(pixels)
+    if wcs.sip === nothing
+        # Apply CD to all pixel coordinates, then fold in the constant CRPIX offset.
+        cd = Matrix{T}(wcs.cd)
+        intermediate = cd * _typed_matrix(T, pixels)
+        origin = wcs.cd * wcs.crpix
+        for k in 1:ncoords, i in 1:A
+            intermediate[i, k] -= T(origin[i])
+        end
+        return intermediate
+    end
+
+    offsets = Matrix{T}(undef, A, ncoords)
+
+    # SIP must be applied column-wise before the batched CD transform.
+    for k in 1:ncoords
+        focal = sip_pixel_to_focal(wcs.sip, view(pixels, :, k))
+        for i in 1:A
+            offsets[i, k] = T(focal[i]) - T(wcs.crpix[i])
+        end
+    end
+    return Matrix{T}(wcs.cd) * offsets
+end
+
+function _intermediate_to_pixel_batch(wcs::WCSTransform{A}, intermediate::AbstractMatrix, ::Type{T}) where {A,T<:AbstractFloat}
+    # Solve the inverse linear transform for all coordinates at once.
+    pixels = Matrix{T}(wcs.cd) \ Matrix{T}(intermediate)
+    for k in axes(pixels, 2), i in 1:A
+        pixels[i, k] += T(wcs.crpix[i])
+    end
+
+    # Apply inverse SIP column-wise because the polynomial solve is per coordinate.
+    wcs.sip === nothing && return pixels
+    result = similar(pixels, T, A, size(pixels, 2))
+    for k in axes(pixels, 2)
+        result[:, k] = sip_focal_to_pixel(wcs.sip, view(pixels, :, k))
+    end
+    return result
+end
+
+function _linear_world_to_pixel_batch(wcs::WCSTransform{A}, worlds::AbstractMatrix, ::Type{T}) where {A,T<:AbstractFloat}
+    # Solve CD * p = world for all columns, then fold in the CRPIX/CRVAL offset.
+    cd = Matrix{T}(wcs.cd)
+    pixels = cd \ _typed_matrix(T, worlds)
+    origin = convert(SVector{A,T}, wcs.crpix) - (cd \ convert(SVector{A,T}, wcs.crval))
+    for k in axes(pixels, 2), i in 1:A
+        pixels[i, k] += origin[i]
+    end
+    return pixels
+end
+
+function _add_crval_rows!(wcs::WCSTransform{A}, coords::AbstractMatrix, ::Type{T}) where {A,T<:AbstractFloat}
+    # Add CRVAL by row so all non-celestial axes preserve their header offsets.
+    for k in axes(coords, 2), i in 1:A
+        coords[i, k] += T(wcs.crval[i])
+    end
+    return coords
+end
+
+function _world_offsets_batch(wcs::WCSTransform{A}, worlds::AbstractMatrix, ::Type{T}) where {A,T<:AbstractFloat}
+    offsets = similar(worlds, T, A, size(worlds, 2))
+
+    # Subtract CRVAL by row to form intermediate coordinates for all axes.
+    for k in axes(worlds, 2), i in 1:A
+        offsets[i, k] = T(worlds[i, k]) - T(wcs.crval[i])
+    end
+    return offsets
+end
+
 """
     pixel_to_world(wcs, pixels::AbstractMatrix) -> AbstractMatrix
 
@@ -212,11 +285,33 @@ function pixel_to_world(wcs::WCSTransform, pixels::AbstractMatrix)
     naxis, N = size(pixels)
     naxis == wcs.naxis ||
         throw(DimensionMismatch("pixels has $(naxis) rows, expected $(wcs.naxis)"))
-    result = similar(pixels, _float_type(eltype(pixels)), naxis, N)
-    for k in 1:N
-        result[:, k] = pixel_to_world(wcs, view(pixels, :, k))
+    T = _float_type(eltype(pixels))
+
+    # Apply the linear pixel-to-intermediate transform to the whole batch.
+    intermediate = _pixel_to_intermediate_batch(wcs, pixels, T)
+
+    if isnothing(wcs.projection)
+        # Purely linear WCS only needs CRVAL added to each output axis.
+        return _add_crval_rows!(wcs, intermediate, T)
     end
-    return result
+
+    lon_idx = wcs.lon_axis
+    lat_idx = wcs.lat_axis
+    d2r = deg2rad(one(T))
+    r2d = inv(d2r)
+    alpha_p = T(wcs.alpha_p) * d2r
+    delta_p = T(wcs.delta_p) * d2r
+    phi_p = T(wcs.lonpole) * d2r
+
+    # Preserve non-celestial axes, then overwrite celestial axes after projection.
+    world = _add_crval_rows!(wcs, copy(intermediate), T)
+    for k in 1:N
+        phi, theta = intermediate_to_native(wcs.projection, intermediate[lon_idx, k], intermediate[lat_idx, k])
+        alpha, delta = native_to_celestial(phi, theta, alpha_p, delta_p, phi_p)
+        world[lon_idx, k] = mod(alpha * r2d, T(360))
+        world[lat_idx, k] = delta * r2d
+    end
+    return world
 end
 
 function pixel_to_world(wcs::WCSTransform, pixels::AbstractVector{<:AbstractVector})
@@ -236,11 +331,41 @@ function world_to_pixel(wcs::WCSTransform, worlds::AbstractMatrix)
     naxis, N = size(worlds)
     naxis == wcs.naxis ||
         throw(DimensionMismatch("worlds has $(naxis) rows, expected $(wcs.naxis)"))
-    result = similar(worlds, _float_type(eltype(worlds)), naxis, N)
-    for k in 1:N
-        result[:, k] = world_to_pixel(wcs, view(worlds, :, k))
+    T = _float_type(eltype(worlds))
+
+    if wcs.projection === nothing
+        # Purely linear WCS can solve all world coordinates directly.
+        return _linear_world_to_pixel_batch(wcs, worlds, T)
     end
-    return result
+
+    # Start from linear world offsets; celestial axes may be overwritten below.
+    intermediate = _world_offsets_batch(wcs, worlds, T)
+
+    lon_idx = wcs.lon_axis
+    lat_idx = wcs.lat_axis
+    d2r = deg2rad(one(T))
+    alpha_p = T(wcs.alpha_p) * d2r
+    delta_p = T(wcs.delta_p) * d2r
+    phi_p = T(wcs.lonpole) * d2r
+
+    # Convert each celestial coordinate back to projection-plane coordinates.
+    for k in 1:N
+        lon_delta = mod(T(worlds[lon_idx, k]) - T(wcs.crval[lon_idx]) + T(180), T(360)) - T(180)
+        if abs(lon_delta) <= T(1e-10) && abs(T(worlds[lat_idx, k]) - T(wcs.crval[lat_idx])) <= T(1e-10)
+            intermediate[lon_idx, k] = zero(T)
+            intermediate[lat_idx, k] = zero(T)
+        else
+            alpha = T(worlds[lon_idx, k]) * d2r
+            delta = T(worlds[lat_idx, k]) * d2r
+            phi, theta = celestial_to_native(alpha, delta, alpha_p, delta_p, phi_p)
+            x_lon, x_lat = native_to_intermediate(wcs.projection, phi, theta)
+            intermediate[lon_idx, k] = T(x_lon)
+            intermediate[lat_idx, k] = T(x_lat)
+        end
+    end
+
+    # Solve the inverse linear transform for all coordinates in one operation.
+    return _intermediate_to_pixel_batch(wcs, intermediate, T)
 end
 
 function world_to_pixel(wcs::WCSTransform, worlds::AbstractVector{<:AbstractVector})

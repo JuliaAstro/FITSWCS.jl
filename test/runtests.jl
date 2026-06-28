@@ -1278,6 +1278,10 @@ end
         for k in 1:3
             @test w_batch[:, k] ≈ pixel_to_world(wcs, pix_mat[:, k])  atol=1e-14
         end
+        p_batch = world_to_pixel(wcs, w_batch)
+        for k in 1:3
+            @test p_batch[:, k] ≈ world_to_pixel(wcs, w_batch[:, k])  atol=1e-10
+        end
     end
 end
 
