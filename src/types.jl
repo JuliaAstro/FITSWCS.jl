@@ -132,6 +132,160 @@ Paper II, Eq. 75.
 """
 struct AIT <: AbstractProjection end
 
+# ── Zenithal polynomial projections ───────────────────────────────────────────
+
+"""    ZPN
+
+Zenithal/azimuthal polynomial projection.  FITS projection code `ZPN`.
+
+The native radius is a polynomial in the colatitude `zd = π/2 − θ` (radians):
+
+    r = Σ pv[m] * zd^m   (m = 0, 1, ..., N)
+
+The polynomial coefficients are supplied through the PV header keywords
+`PVlat_0`, `PVlat_1`, ... on the latitude-like axis.  The default
+(coefficients all zero) projects to the origin for all sky directions.
+
+Paper II, Eq. 55.
+"""
+struct ZPN <: AbstractProjection
+    pv::Vector{Float64}   # polynomial coefficients pv[1] ≡ PV_0, pv[2] ≡ PV_1, ...
+end
+ZPN() = ZPN([0.0, 1.0])  # linear r = zd default (same as ARC)
+
+"""    AIR
+
+Airy projection.  FITS projection code `AIR`.
+
+`theta_b` is the break latitude (degrees) at which the projection is zero;
+default is 90°.
+
+Paper II, Section 5.5, Eq. 30–31.
+"""
+struct AIR <: AbstractProjection
+    theta_b::Float64   # break latitude in degrees
+end
+AIR() = AIR(90.0)
+
+# ── Conic projections ──────────────────────────────────────────────────────────
+
+"""    COP
+
+Conic perspective projection.  FITS projection code `COP`.
+
+Parameters `sigma` (PVlat_1) and `delta` (PVlat_2) define the cone aperture.
+Both are in degrees.
+
+Paper II, Section 6.1.
+"""
+struct COP <: AbstractProjection
+    sigma::Float64   # degrees; native standard parallel
+    delta::Float64   # degrees; half-opening angle
+end
+
+"""    COD
+
+Conic equidistant projection.  FITS projection code `COD`.
+
+Parameters `sigma` (PVlat_1) and `delta` (PVlat_2) in degrees.
+
+Paper II, Section 6.2.
+"""
+struct COD <: AbstractProjection
+    sigma::Float64
+    delta::Float64
+end
+
+"""    COE
+
+Conic equal-area projection.  FITS projection code `COE`.
+
+Parameters `sigma` (PVlat_1) and `delta` (PVlat_2) in degrees.
+
+Paper II, Section 6.3.
+"""
+struct COE <: AbstractProjection
+    sigma::Float64
+    delta::Float64
+end
+
+"""    COO
+
+Conic orthomorphic projection.  FITS projection code `COO`.
+
+Parameters `sigma` (PVlat_1) and `delta` (PVlat_2) in degrees.
+
+Paper II, Section 6.4.
+"""
+struct COO <: AbstractProjection
+    sigma::Float64
+    delta::Float64
+end
+
+"""    BON
+
+Bonne's projection.  FITS projection code `BON`.
+
+`theta1` (PVlat_1) is the standard parallel in degrees.
+When `theta1 == 0`, the projection degenerates to SFL (Sanson-Flamsteed).
+
+Paper II, Section 7.4, Eq. 70.
+"""
+struct BON <: AbstractProjection
+    theta1::Float64   # degrees
+end
+
+# ── Quadrilateralized spherical cube projections ───────────────────────────────
+
+"""    TSC
+
+Tangential spherical cube projection.  FITS projection code `TSC`.
+
+Paper II, Section 8.1.
+"""
+struct TSC <: AbstractProjection end
+
+"""    CSC
+
+COBE quadrilateralized spherical cube projection.  FITS projection code `CSC`.
+
+Paper II, Section 8.2.
+"""
+struct CSC <: AbstractProjection end
+
+"""    QSC
+
+Quadrilateralized spherical cube projection.  FITS projection code `QSC`.
+
+Paper II, Section 8.3.
+"""
+struct QSC <: AbstractProjection end
+
+# ── HEALPix projections ────────────────────────────────────────────────────────
+
+"""    HPX
+
+HEALPix projection.  FITS projection code `HPX`.
+
+Parameters `H` (PVlat_1, default 4) and `K` (PVlat_2, default 3) define the
+partition of the sphere.
+
+Calabretta & Roukema (2007).
+"""
+struct HPX <: AbstractProjection
+    H::Int   # number of facets around the equatorial zone
+    K::Int   # number of facets in each polar cap
+end
+HPX() = HPX(4, 3)
+
+"""    XPH
+
+HEALPix polar cap projection (rotated HPX).  FITS projection code `XPH`.
+
+Calabretta & Roukema (2007).
+"""
+struct XPH <: AbstractProjection end
+
 # ── Unknown / deferred ────────────────────────────────────────────────────────
 
 """    UnknownProjection

@@ -734,6 +734,1334 @@ function native_to_intermediate(::AIT, phi::Real, theta::Real)
 end
 
 # ──────────────────────────────────────────────────────────────────────────────
+# ZPN – Zenithal polynomial projection   (Paper II, Eq. 55)
+# ──────────────────────────────────────────────────────────────────────────────
+
+"""
+    intermediate_to_native(proj::ZPN, x, y) -> (phi, theta)
+
+Inverse ZPN projection.  The native radius (in degrees) is evaluated as a
+polynomial in the colatitude zd = π/2 − θ.  The polynomial is inverted
+numerically.
+
+Paper II, Section 5.2.
+"""
+function intermediate_to_native(proj::ZPN, x::Real, y::Real)
+    T = _promote_float_type(x, y)
+    pv = proj.pv
+
+    # Native azimuth from zenithal geometry.
+    phi = _phi_zenithal(x, y)
+
+    # Native radius (degrees) and scaled to polynomial variable (radians).
+    r_deg = hypot(x, y)
+
+    # Degree of polynomial (length(pv)-1).
+    npv = length(pv)
+
+    # Evaluate the polynomial and its derivative to find the inflection/root.
+    # If the polynomial is linear (or constant), solve analytically.
+    # Otherwise use bisection in [0, π] to find zd such that P(zd) = r_deg/R2D.
+    # Where R2D = 180/π.
+
+    target = deg2rad(r_deg)  # dimensionless units (radians)
+
+    # Special case: degree-0 polynomial (constant).
+    if npv == 1
+        abs(target - pv[1]) < T(1e-12) || error("ZPN projection: point outside valid domain")
+        theta = _halfpi(T)
+        return phi, theta
+    end
+
+    # Degree-1: r = pv[1] + pv[2]*zd  →  zd = (target - pv[1]) / pv[2]
+    if npv == 2
+        !iszero(pv[2]) || error("ZPN projection: degenerate polynomial (pv[2]=0)")
+        zd = (target - T(pv[1])) / T(pv[2])
+        abs(zd) <= π || error("ZPN projection: point outside valid domain")
+        theta = _halfpi(T) - zd
+        return phi, theta
+    end
+
+    # Degree-2: solve analytically to avoid bisection issues at the root.
+    if npv == 3
+        c = T(pv[1]) - target
+        b = T(pv[2])
+        a = T(pv[3])
+        if abs(a) < T(1e-15)
+            # Degenerate to degree-1.
+            abs(b) > T(1e-15) || error("ZPN projection: degenerate polynomial")
+            zd = -c / b
+        else
+            disc = b^2 - 4*a*c
+            disc >= -T(1e-14) || error("ZPN projection: point outside valid domain")
+            disc = max(zero(T), disc)
+            sqrt_disc = sqrt(disc)
+            # Pick the smaller non-negative root (closest to the projection center).
+            zd1 = (-b + sqrt_disc) / (2*a)
+            zd2 = (-b - sqrt_disc) / (2*a)
+            if zd1 >= 0 && (zd1 <= zd2 || zd2 < 0)
+                zd = zd1
+            else
+                zd = zd2
+            end
+            zd >= 0 || error("ZPN projection: point outside valid domain")
+        end
+        abs(zd) <= π || error("ZPN projection: point outside valid domain")
+        theta = _halfpi(T) - zd
+        return phi, theta
+    end
+
+    # General case: bisection on [0, π] to find zd such that P(zd) = target.
+    # First check the endpoints and the zd=0 case.
+    zfn(z) = T(evalpoly(z, pv)) - target
+
+    # If target = 0 and pv[1] = 0, zd = 0 is a root (reference point).
+    p_at_0 = zfn(zero(T))
+    if abs(p_at_0) < T(1e-14)
+        zd = zero(T)
+        theta = _halfpi(T) - zd
+        return phi, theta
+    end
+
+    # Find the first maximum of P (where P' turns negative) as the
+    # upper limit.  The closest root to zd=0 is in [0, zd_max].
+    dpv = [T(k) * T(pv[k+1]) for k in 1:npv-1]
+    _dpoly(z) = evalpoly(z, dpv)
+    zd_max = _pi(T)
+
+    if length(dpv) >= 1
+        dp0 = _dpoly(zero(T))
+        if dp0 < 0
+            zd_max = _pi(T)  # polynomial decreases monotonically — use full range
+        else
+            a, b = zero(T), _pi(T)
+            fa, fb = dp0, _dpoly(b)
+            if fa * fb < 0
+                for _ in 1:64
+                    m = (a + b) / 2
+                    fm = _dpoly(m)
+                    if fm * fa < 0
+                        b, fb = m, fm
+                    else
+                        a, fa = m, fm
+                    end
+                    (b - a) < T(1e-14) && break
+                end
+                zd_max = (a + b) / 2
+            end
+        end
+    end
+
+    # Bisect on [0, zd_max] to find the smallest positive root.
+    a, b = zero(T), zd_max
+    pa = zfn(a)
+    pb = zfn(b)
+
+    # If pa is zero we already returned above; check pb.
+    if abs(pb) < T(1e-14)
+        zd = b
+        theta = _halfpi(T) - zd
+        return phi, theta
+    end
+
+    pa * pb > 0 && error("ZPN projection: point outside the valid domain of the polynomial")
+
+    for _ in 1:64
+        m  = (a + b) / 2
+        pm = zfn(m)
+        if abs(pm) < T(1e-15)
+            zd = m
+            theta = _halfpi(T) - zd
+            return phi, theta
+        end
+        if pm * pa < 0
+            b, pb = m, pm
+        else
+            a, pa = m, pm
+        end
+        (b - a) < T(1e-15) && break
+    end
+
+    zd = (a + b) / 2
+    theta = _halfpi(T) - zd
+    return phi, theta
+end
+
+"""
+    native_to_intermediate(proj::ZPN, phi, theta) -> (x, y)
+
+Forward ZPN projection.
+"""
+function native_to_intermediate(proj::ZPN, phi::Real, theta::Real)
+    T = _promote_float_type(phi, theta)
+    pv = proj.pv
+
+    # Colatitude in radians.
+    zd = _halfpi(T) - theta
+
+    # evalpoly uses Horner's method internally and is faster than a manual loop.
+    r = T(evalpoly(zd, pv))
+
+    # Convert from radians (polynomial variable) to degrees (projection plane).
+    r_deg = rad2deg(r)
+
+    return _zenithal_native_to_xy(r_deg, phi)
+end
+
+# ──────────────────────────────────────────────────────────────────────────────
+# AIR – Airy projection   (Paper II, Section 5.5, Eq. 30–31)
+# ──────────────────────────────────────────────────────────────────────────────
+
+const _AIR_TOL = 1e-14
+
+"""
+    intermediate_to_native(proj::AIR, x, y) -> (phi, theta)
+
+Inverse AIR projection.  Bisection is used to invert the Airy formula.
+
+Paper II, Section 5.5.
+"""
+function intermediate_to_native(proj::AIR, x::Real, y::Real)
+    T = _promote_float_type(x, y)
+    R2D = rad2deg(one(T)) # = 180 / π
+    D2R = deg2rad(one(T)) # = π/180
+
+    phi = _phi_zenithal(x, y)
+    r_deg = hypot(x, y)
+
+    theta_b = T(proj.theta_b)
+
+    # Pre-compute the w constants from wcslib airset.
+    # xi_b = (90 - theta_b) / 2  in radians
+    xi_b = D2R * (90 - theta_b) / 2
+
+    # w[0] = 2*R2D (the overall scale factor)
+    w0 = 2 * R2D
+
+    if abs(xi_b) < T(_AIR_TOL)
+        # theta_b = 90°: w[1] = -0.5 (limit of log(cos(xi))/... as xi→0)
+        w1 = T(-0.5)
+        w2 = one(T)  # ensures w3 is finite
+    else
+        cos_xib = cos(xi_b)
+        sin_xib = sin(xi_b)
+        # w[1] = log(cos_xib) * cos_xib^2 / sin_xib^2
+        w1 = log(cos_xib) * cos_xib^2 / sin_xib^2
+        # w[2] = 0.5 - w1
+        w2 = T(0.5) - w1
+    end
+
+    # w[3] = w[0] * w[2]
+    w3 = w0 * w2
+
+    # The target: r_deg / w[0].
+    # AIR inverse: find xi such that -(log(cos(xi))/tan(xi) + w1*tan(xi)) = r_target
+    r_target = r_deg / w0
+
+    # Reference point: r_target = 0 → xi = 0, theta = π/2.
+    if abs(r_target) < T(_AIR_TOL)
+        return phi, _halfpi(T)
+    end
+
+    # Bisect on [0, π/2) to find xi.
+    # At xi → 0: the function → 0.
+    # At xi → π/2: the function → ∞.
+    a, b = zero(T), _halfpi(T) * (1 - T(1e-10))
+
+    for _ in 1:64
+        m  = (a + b) / 2
+        cos_m = cos(m)
+        sin_m = sin(m)
+        if abs(sin_m) < T(1e-15) || abs(cos_m) < T(1e-15)
+            b = m
+            continue
+        end
+        # g(xi) = -(log(cos(xi))/tan(xi) + w1*tan(xi)) - r_target
+        # g(0) = -r_target < 0, g increases monotonically with xi.
+        gm = -(log(cos_m) / (sin_m / cos_m) + w1 * (sin_m / cos_m)) - r_target
+        if gm < 0
+            a = m    # root is to the right
+        else
+            b = m    # root is to the left
+        end
+        (b - a) < T(1e-15) && break
+    end
+
+    xi = (a + b) / 2
+    theta = _halfpi(T) - 2 * xi
+
+    return phi, theta
+end
+
+"""
+    native_to_intermediate(proj::AIR, phi, theta) -> (x, y)
+
+Forward AIR projection.
+"""
+function native_to_intermediate(proj::AIR, phi::Real, theta::Real)
+    T = _promote_float_type(phi, theta)
+    R2D = rad2deg(one(T)) # = T(180 / π)
+    D2R = deg2rad(one(T)) # = T(π / 180)
+
+    theta_b = T(proj.theta_b)
+    xi_b = D2R * (90 - theta_b) / 2
+
+    w0 = 2 * R2D
+
+    if abs(xi_b) < T(_AIR_TOL)
+        w1 = T(-0.5)
+    else
+        cos_xib = cos(xi_b)
+        sin_xib = sin(xi_b)
+        w1 = log(cos_xib) * cos_xib^2 / sin_xib^2
+    end
+    w2 = T(0.5) - w1
+    w3 = w0 * w2
+
+    # xi = (π/2 - theta) / 2
+    xi = (_halfpi(T) - theta) / 2
+
+    if abs(xi) < T(_AIR_TOL)
+        r_deg = xi * w3
+    else
+        cos_xi = cos(xi)
+        tan_xi = tan(xi)
+        r_deg = -w0 * (log(cos_xi) / tan_xi + w1 * tan_xi)
+    end
+
+    return _zenithal_native_to_xy(r_deg, phi)
+end
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Conic projection utilities
+# ──────────────────────────────────────────────────────────────────────────────
+
+# Shared inverse helper for all four conic projections:
+# given (x, y) and the Y0 offset and cone half-angle C, return
+# (r_deg, alpha_rad), where r_deg is unsigned if sigma ≥ 0.
+# Caller is responsible for sign convention on r and computing phi/theta.
+
+@inline function _conic_xy_to_r_alpha(x::T, y::T, Y0_deg::T, sigma_rad::T) where {T <: Real}
+    dy = Y0_deg - y
+    r = hypot(x, dy)
+    sigma_rad < 0 && (r = -r)
+    alpha = atan(x, dy)
+    return r, alpha
+end
+
+# ──────────────────────────────────────────────────────────────────────────────
+# COP – Conic perspective projection   (Paper II, Section 6.1)
+# ──────────────────────────────────────────────────────────────────────────────
+
+"""
+    intermediate_to_native(proj::COP, x, y) -> (phi, theta)
+
+Inverse COP projection.
+
+Paper II, Section 6.1, Eq. 57–58.
+"""
+function intermediate_to_native(proj::COP, x::Real, y::Real)
+    T = _promote_float_type(x, y)
+    R2D = rad2deg(one(T)) # = T(180 / π)
+
+    sigma_rad = T(deg2rad(proj.sigma))
+    delta_rad = T(deg2rad(proj.delta))
+
+    # Cone constant C = sin(sigma)
+    C = sin(sigma_rad)
+    C != 0 || error("COP: sigma = 0 is a degenerate case (use CAR or SFL instead)")
+
+    # Y0 = R2D * cos(delta) * cot(sigma) = R2D * cos(delta) * cos(sigma) / sin(sigma)
+    Y0_deg = R2D * cos(delta_rad) * cos(sigma_rad) / sin(sigma_rad)
+
+    r_deg, alpha_rad = _conic_xy_to_r_alpha(T(x), T(y), Y0_deg, sigma_rad)
+
+    phi = alpha_rad / C
+
+    # theta = sigma + atan(cot(sigma) - r_deg/(R2D * cos(delta)))
+    theta = sigma_rad + atan(cos(sigma_rad) / sin(sigma_rad) -
+                              deg2rad(r_deg) / cos(delta_rad))
+    return phi, theta
+end
+
+"""
+    native_to_intermediate(proj::COP, phi, theta) -> (x, y)
+
+Forward COP projection.
+"""
+function native_to_intermediate(proj::COP, phi::Real, theta::Real)
+    T = _promote_float_type(phi, theta)
+    R2D = rad2deg(one(T)) # = T(180 / π)
+
+    sigma_rad = T(deg2rad(proj.sigma))
+    delta_rad = T(deg2rad(proj.delta))
+
+    C = sin(sigma_rad)
+    C != 0 || error("COP: sigma = 0 is degenerate")
+
+    Y0_deg = R2D * cos(delta_rad) * cos(sigma_rad) / sin(sigma_rad)
+
+    alpha_rad = C * _wrap_native_phi(phi)
+    t = theta - sigma_rad
+    cos_t = cos(t)
+    abs(cos_t) > T(1e-15) || error("COP: singularity at theta = sigma ± 90°")
+
+    r_deg = Y0_deg - R2D * cos(delta_rad) * tan(t)
+
+    x = r_deg * sin(alpha_rad)
+    y = -r_deg * cos(alpha_rad) + Y0_deg
+    return x, y
+end
+
+# ──────────────────────────────────────────────────────────────────────────────
+# COD – Conic equidistant projection   (Paper II, Section 6.2)
+# ──────────────────────────────────────────────────────────────────────────────
+
+"""
+    intermediate_to_native(proj::COD, x, y) -> (phi, theta)
+
+Inverse COD projection.
+
+Paper II, Section 6.2, Eq. 59–60.
+"""
+function intermediate_to_native(proj::COD, x::Real, y::Real)
+    T = _promote_float_type(x, y)
+    R2D = rad2deg(one(T)) # = T(180 / π)
+
+    sigma_rad = T(deg2rad(proj.sigma))
+    delta_rad = T(deg2rad(proj.delta))
+
+    # Cone constant C = sin(sigma) * sinc(delta) (dimensionless)
+    C = if abs(delta_rad) < T(1e-12)
+        sin(sigma_rad)   # limit of sin(sigma)*sin(delta)/delta as delta→0
+    else
+        sin(sigma_rad) * sin(delta_rad) / delta_rad
+    end
+    abs(C) > T(1e-15) || error("COD: degenerate case (C ≈ 0)")
+
+    Y0_deg = R2D * cos(delta_rad) * cos(sigma_rad) / C
+
+    r_deg, alpha_rad = _conic_xy_to_r_alpha(T(x), T(y), Y0_deg, sigma_rad)
+
+    phi   = alpha_rad / C
+    theta = sigma_rad + delta_rad - deg2rad(r_deg) / (R2D / R2D)
+    # Simplify: theta_rad = sigma_rad + delta_rad * (...) is the COD form.
+    # From wcslib: theta = w3 - r; w3 = Y0_d + sigma_d (both in degrees)
+    # So theta_rad = deg2rad(Y0_deg + rad2deg(sigma_rad) - r_deg)
+    theta = deg2rad(Y0_deg + rad2deg(sigma_rad) - r_deg)
+
+    return phi, theta
+end
+
+"""
+    native_to_intermediate(proj::COD, phi, theta) -> (x, y)
+
+Forward COD projection.
+"""
+function native_to_intermediate(proj::COD, phi::Real, theta::Real)
+    T = _promote_float_type(phi, theta)
+    R2D = rad2deg(one(T)) # = T(180 / π)
+
+    sigma_rad = T(deg2rad(proj.sigma))
+    delta_rad = T(deg2rad(proj.delta))
+
+    C = if abs(delta_rad) < T(1e-12)
+        sin(sigma_rad)
+    else
+        sin(sigma_rad) * sin(delta_rad) / delta_rad
+    end
+    abs(C) > T(1e-15) || error("COD: degenerate case (C ≈ 0)")
+
+    Y0_deg = R2D * cos(delta_rad) * cos(sigma_rad) / C
+
+    alpha_rad = C * _wrap_native_phi(phi)
+    # r = (Y0_d + sigma_d) - theta_d
+    r_deg = Y0_deg + rad2deg(sigma_rad) - rad2deg(theta)
+
+    x = r_deg * sin(alpha_rad)
+    y = -r_deg * cos(alpha_rad) + Y0_deg
+    return x, y
+end
+
+# ──────────────────────────────────────────────────────────────────────────────
+# COE – Conic equal-area projection   (Paper II, Section 6.3)
+# ──────────────────────────────────────────────────────────────────────────────
+
+"""
+    intermediate_to_native(proj::COE, x, y) -> (phi, theta)
+
+Inverse COE projection.
+
+Paper II, Section 6.3, Eq. 61–62.
+"""
+function intermediate_to_native(proj::COE, x::Real, y::Real)
+    T = _promote_float_type(x, y)
+    R2D = rad2deg(one(T)) # = T(180 / π)
+
+    sigma_rad = T(deg2rad(proj.sigma))
+    delta_rad = T(deg2rad(proj.delta))
+    theta1_rad = sigma_rad - delta_rad
+    theta2_rad = sigma_rad + delta_rad
+
+    C = (sin(theta1_rad) + sin(theta2_rad)) / 2
+    abs(C) > T(1e-15) || error("COE: degenerate case (C ≈ 0)")
+
+    chi = R2D / C
+    psi = one(T) + sin(theta1_rad) * sin(theta2_rad)
+    Y0_deg = chi * sqrt(max(zero(T), psi - 2 * C * sin(sigma_rad)))
+
+    # w[6] = chi^2 * psi,  w[7] = C / (2 * R2D^2)
+    w6 = chi^2 * psi
+    w7 = C / (2 * R2D^2)
+
+    r_deg, alpha_rad = _conic_xy_to_r_alpha(T(x), T(y), Y0_deg, sigma_rad)
+
+    phi = alpha_rad / C
+
+    arg = (w6 - r_deg^2) * w7
+    abs(arg) <= one(T) + T(1e-12) || error("COE: point outside valid domain")
+    theta = asin(clamp(arg, -one(T), one(T)))
+
+    return phi, theta
+end
+
+"""
+    native_to_intermediate(proj::COE, phi, theta) -> (x, y)
+
+Forward COE projection.
+"""
+function native_to_intermediate(proj::COE, phi::Real, theta::Real)
+    T = _promote_float_type(phi, theta)
+    R2D = rad2deg(one(T)) # = T(180 / π)
+
+    sigma_rad = T(deg2rad(proj.sigma))
+    delta_rad = T(deg2rad(proj.delta))
+    theta1_rad = sigma_rad - delta_rad
+    theta2_rad = sigma_rad + delta_rad
+
+    C = (sin(theta1_rad) + sin(theta2_rad)) / 2
+    abs(C) > T(1e-15) || error("COE: degenerate case")
+
+    chi = R2D / C
+    psi = one(T) + sin(theta1_rad) * sin(theta2_rad)
+    Y0_deg = chi * sqrt(max(zero(T), psi - 2 * C * sin(sigma_rad)))
+
+    alpha_rad = C * _wrap_native_phi(phi)
+
+    if theta == -_halfpi(T)
+        # Southern pole: r = w[8] = chi * sqrt(psi + 2*C)
+        r_deg = chi * sqrt(max(zero(T), psi + 2 * C))
+    else
+        r_deg = chi * sqrt(max(zero(T), psi - 2 * C * sin(theta)))
+    end
+
+    x = r_deg * sin(alpha_rad)
+    y = -r_deg * cos(alpha_rad) + Y0_deg
+    return x, y
+end
+
+# ──────────────────────────────────────────────────────────────────────────────
+# COO – Conic orthomorphic projection   (Paper II, Section 6.4)
+# ──────────────────────────────────────────────────────────────────────────────
+
+"""
+    intermediate_to_native(proj::COO, x, y) -> (phi, theta)
+
+Inverse COO projection.
+
+Paper II, Section 6.4, Eq. 63–64.
+"""
+function intermediate_to_native(proj::COO, x::Real, y::Real)
+    T = _promote_float_type(x, y)
+    R2D = rad2deg(one(T)) # = T(180 / π)
+
+    sigma_rad = T(deg2rad(proj.sigma))
+    delta_rad = T(deg2rad(proj.delta))
+    theta1_rad = sigma_rad - delta_rad
+    theta2_rad = sigma_rad + delta_rad
+
+    # Cone constant C.
+    C = if abs(delta_rad) < T(1e-14)
+        sin(theta1_rad)
+    else
+        # tau1 = (90 - theta1) / 2 in radians,  tan1 = tan(tau1)
+        tau1 = (_halfpi(T) - theta1_rad) / 2
+        tau2 = (_halfpi(T) - theta2_rad) / 2
+        log(cos(theta2_rad) / cos(theta1_rad)) / log(tan(tau2) / tan(tau1))
+    end
+
+    tau1 = (_halfpi(T) - theta1_rad) / 2
+    tan1 = tan(tau1)
+    psi  = R2D * cos(theta1_rad) / (C * tan1^C)
+    Y0_deg = psi * tan((_halfpi(T) - sigma_rad) / 2)^C
+
+    r_deg, alpha_rad = _conic_xy_to_r_alpha(T(x), T(y), Y0_deg, sigma_rad)
+
+    phi = alpha_rad / C
+
+    if abs(r_deg) < T(1e-14)
+        theta = C < 0 ? -_halfpi(T) : error("COO: singularity at origin")
+    else
+        theta = _halfpi(T) - 2 * atan((r_deg / psi)^(one(T) / C))
+    end
+
+    return phi, theta
+end
+
+"""
+    native_to_intermediate(proj::COO, phi, theta) -> (x, y)
+
+Forward COO projection.
+"""
+function native_to_intermediate(proj::COO, phi::Real, theta::Real)
+    T = _promote_float_type(phi, theta)
+    R2D = rad2deg(one(T)) # = T(180 / π)
+
+    sigma_rad = T(deg2rad(proj.sigma))
+    delta_rad = T(deg2rad(proj.delta))
+    theta1_rad = sigma_rad - delta_rad
+    theta2_rad = sigma_rad + delta_rad
+
+    C = if abs(delta_rad) < T(1e-14)
+        sin(theta1_rad)
+    else
+        tau1_l = (_halfpi(T) - theta1_rad) / 2
+        tau2_l = (_halfpi(T) - theta2_rad) / 2
+        log(cos(theta2_rad) / cos(theta1_rad)) / log(tan(tau2_l) / tan(tau1_l))
+    end
+
+    tau1 = (_halfpi(T) - theta1_rad) / 2
+    tan1 = tan(tau1)
+    psi  = R2D * cos(theta1_rad) / (C * tan1^C)
+    Y0_deg = psi * tan((_halfpi(T) - sigma_rad) / 2)^C
+
+    alpha_rad = C * _wrap_native_phi(phi)
+
+    if theta == -_halfpi(T)
+        C < 0 || error("COO: singularity at southern pole when C ≥ 0")
+        r_deg = zero(T)
+    else
+        # r_deg = psi * tan((π/2 - theta)/2)^C
+        r_deg = psi * tan((_halfpi(T) - theta) / 2)^C
+    end
+
+    x = r_deg * sin(alpha_rad)
+    y = -r_deg * cos(alpha_rad) + Y0_deg
+    return x, y
+end
+
+# ──────────────────────────────────────────────────────────────────────────────
+# BON – Bonne's projection   (Paper II, Section 7.4, Eq. 70)
+# ──────────────────────────────────────────────────────────────────────────────
+
+"""
+    intermediate_to_native(proj::BON, x, y) -> (phi, theta)
+
+Inverse BON (Bonne) projection.
+
+Paper II, Section 7.4, Eq. 70.
+"""
+function intermediate_to_native(proj::BON, x::Real, y::Real)
+    T = _promote_float_type(x, y)
+    R2D = rad2deg(one(T)) # = T(180 / π)
+
+    theta1 = T(proj.theta1)
+
+    # Degenerate case: theta1 == 0 degenerates to SFL.
+    if theta1 == 0
+        return intermediate_to_native(SFL(), x, y)
+    end
+
+    theta1_rad = deg2rad(theta1)
+
+    # Y0 = R2D * (cot(theta1) + theta1_rad)
+    Y0_deg = R2D * (cos(theta1_rad) / sin(theta1_rad) + theta1_rad)
+
+    # wcslib bonx2s: dy = w[2] - (y + prj->y0) with prj->y0=0 → dy = Y0_deg - y.
+    dy = Y0_deg - y
+    r  = hypot(x, dy)
+    theta1 < 0 && (r = -r)
+
+    alpha_rad = atan(x, dy)
+
+    theta_deg = Y0_deg - r  # since w[1]=1, theta_deg = Y0_deg - r_deg
+    theta = deg2rad(theta_deg)
+    cos_theta = cos(theta)
+
+    if abs(cos_theta) < T(1e-12)
+        phi = zero(T)
+    else
+        # phi_rad = alpha_rad * r_rad / cos_theta  where r_rad = r_deg/R2D
+        phi = alpha_rad * (r / R2D) / cos_theta
+    end
+
+    return phi, theta
+end
+
+"""
+    native_to_intermediate(proj::BON, phi, theta) -> (x, y)
+
+Forward BON (Bonne) projection.
+"""
+function native_to_intermediate(proj::BON, phi::Real, theta::Real)
+    T = _promote_float_type(phi, theta)
+    R2D = rad2deg(one(T)) # = T(180 / π)
+
+    theta1 = T(proj.theta1)
+
+    # Degenerate case: theta1 == 0 degenerates to SFL.
+    if theta1 == 0
+        return native_to_intermediate(SFL(), phi, theta)
+    end
+
+    theta1_rad = deg2rad(theta1)
+
+    Y0_deg = R2D * (cos(theta1_rad) / sin(theta1_rad) + theta1_rad)
+    r_deg  = Y0_deg - rad2deg(theta)
+
+    # alpha_rad = R2D * phi_rad * cos(theta) / r_deg
+    # Derived from wcslib bons2x: s = r0*phi_deg; alpha_deg = s*cos(theta)/r_deg;
+    # alpha_rad = deg2rad(alpha_deg) = R2D * phi_rad * cos(theta) / r_deg.
+    # wcslib calls prjoff(0, 0) so prj->y0 = 0, and the y-offset is
+    # y0_eff = prj->y0 - w[2] = -Y0_deg, giving y = -r*cos(alpha) + Y0_deg.
+    if abs(r_deg) < T(1e-14)
+        alpha_rad = zero(T)
+    else
+        alpha_rad = phi * cos(theta) * R2D / r_deg
+    end
+
+    x = r_deg * sin(alpha_rad)
+    y = -r_deg * cos(alpha_rad) + Y0_deg
+    return x, y
+end
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Quadrilateralized spherical cube utilities (shared by TSC, CSC, QSC)
+# ──────────────────────────────────────────────────────────────────────────────
+
+# Unit vector from (phi, theta) in radians → (l, m, n) = (x, y, z) in wcslib.
+@inline function _sphere_to_uvec(phi::T, theta::T) where {T <: Real}
+    cos_theta = cos(theta)
+    return cos_theta * cos(phi), cos_theta * sin(phi), sin(theta)
+end
+
+# wcslib face conventions (tscs2x, cscs2x, qscs2x):
+#   Face 0: north pole  (+z face): l = +z-dominant, xf = m/l (=y/z), yf = -l_face (= -x/z wait..)
+# Actually wcslib uses (l,m,n) = (z,x,y) in its own convention... let me use its exact convention:
+#   l = cos(theta)*cos(phi),  m = cos(theta)*sin(phi),  n = sin(theta)
+# Then wcslib face selection (from tscs2x):
+#   face 0: n dominates, n>0  → xf = m/n,  yf = l/n
+#   face 1: l dominates, l>0  → xf = m/l,  yf = n/l
+#   face 2: m dominates, m>0  → xf = -l/m, yf = n/m
+#   face 3: l dominates, l<0  → xf = m/l,  yf = -n/l
+#   face 4: m dominates, m<0  → xf = -l/m, yf = -n/m
+#   face 5: n dominates, n<0  → xf = m/n,  yf = -l/n
+
+# Face scale in degrees per face-coordinate unit (w[0] in WCSLIB).
+const _FACESCALE = 45.0
+
+# Face unit offsets (multiply by _FACESCALE to get degrees on canvas).
+# WCSLIB 8.9: x = 45*(xf + x0u[face]), y = 45*(yf + y0u[face]).
+const _FACE_X0U = (0.0, 0.0, 2.0, 4.0, 6.0, 0.0)
+const _FACE_Y0U = (2.0, 0.0, 0.0, 0.0, 0.0, -2.0)
+
+# Determine face and (xf, yf) ∈ [-1, 1]² from unit vector (l, m, n).
+# WCSLIB 8.9 forward face detection (tscs2x, cscs2x, qscs2x).
+function _xyz_to_cube_face(l::T, m::T, n::T) where {T <: Real}
+    face = 0
+    zeta = n
+    if l > zeta; face = 1; zeta = l; end
+    if m > zeta; face = 2; zeta = m; end
+    if -l > zeta; face = 3; zeta = -l; end
+    if -m > zeta; face = 4; zeta = -m; end
+    if -n > zeta; face = 5; zeta = -n; end
+
+    if face == 1
+        xf =  m / zeta
+        yf =  n / zeta
+    elseif face == 2
+        xf = -l / zeta
+        yf =  n / zeta
+    elseif face == 3
+        xf = -m / zeta
+        yf =  n / zeta
+    elseif face == 4
+        xf =  l / zeta
+        yf =  n / zeta
+    elseif face == 5
+        xf =  m / zeta
+        yf =  l / zeta
+    else  # face == 0
+        xf =  m / zeta
+        yf = -l / zeta
+    end
+    return face, xf, yf
+end
+
+# Recover unit vector (l, m, n) from face and (xf, yf).
+# WCSLIB 8.9 inverse face-to-sphere (tscx2s, cscx2s, qscx2s).
+function _face_to_uvec(face::Int, xf::T, yf::T) where {T <: Real}
+    if face == 1
+        l =  one(T); m =  xf;     n =  yf
+    elseif face == 2
+        l = -xf;     m =  one(T); n =  yf
+    elseif face == 3
+        l = -one(T); m = -xf;     n =  yf
+    elseif face == 4
+        l =  xf;     m = -one(T); n =  yf
+    elseif face == 5
+        l =  yf;     m = -xf;     n = -one(T)
+    else  # face == 0
+        l = -yf;     m =  xf;     n =  one(T)
+    end
+    r = hypot(l, m, n)
+    return l / r, m / r, n / r
+end
+
+# Convert canvas (x, y) [degrees] to face and (xf, yf) ∈ [-1, 1]².
+# WCSLIB 8.9 inverse face determination (tscx2s, cscx2s, qscx2s).
+# scale = 45.0 (w[0]) — face coordinate scaling in degrees/unit.
+function _cube_xy_to_face(x_deg::T, y_deg::T, scale::T) where {T <: Real}
+    TOL = T(1e-13)
+    xf = x_deg / scale
+    yf = y_deg / scale
+
+    # Handle negative face wrapping (xf < -1 → add 8 face units).
+    if xf < -one(T); xf += T(8); end
+
+    if yf > one(T) + TOL
+        face = 0; yf -= T(2)
+    elseif yf < -one(T) - TOL
+        face = 5; yf += T(2)
+    elseif xf > T(5) + TOL
+        face = 4; xf -= T(6)
+    elseif xf > T(3) + TOL
+        face = 3; xf -= T(4)
+    elseif xf > one(T) + TOL
+        face = 2; xf -= T(2)
+    else
+        face = 1
+    end
+    return face, xf, yf
+end
+
+# ──────────────────────────────────────────────────────────────────────────────
+# TSC – Tangential spherical cube   (Paper II, Section 8.1)
+# ──────────────────────────────────────────────────────────────────────────────
+
+"""
+    native_to_intermediate(::TSC, phi, theta) -> (x, y)
+
+Forward TSC projection.  Paper II, Section 8.1.
+"""
+function native_to_intermediate(::TSC, phi::Real, theta::Real)
+    T = _promote_float_type(phi, theta)
+    l, m, n = _sphere_to_uvec(T(phi), T(theta))
+    face, xf, yf = _xyz_to_cube_face(l, m, n)
+    s = T(_FACESCALE)
+    x = s * (xf + T(_FACE_X0U[face + 1]))
+    y = s * (yf + T(_FACE_Y0U[face + 1]))
+    return x, y
+end
+
+"""
+    intermediate_to_native(::TSC, x, y) -> (phi, theta)
+
+Inverse TSC projection.  Paper II, Section 8.1.
+"""
+function intermediate_to_native(::TSC, x::Real, y::Real)
+    T = _promote_float_type(x, y)
+    face, xf, yf = _cube_xy_to_face(T(x), T(y), T(_FACESCALE))
+    l, m, n = _face_to_uvec(face, xf, yf)
+    phi = atan(m, l)
+    theta = asin(clamp(n, -one(T), one(T)))
+    return phi, theta
+end
+
+# ──────────────────────────────────────────────────────────────────────────────
+# CSC – COBE quadrilateralized spherical cube   (Paper II, Section 8.2)
+# ──────────────────────────────────────────────────────────────────────────────
+
+# Inverse (x2s) polynomial: maps (chi, psi) face coords to (xf, yf).
+# chi is the primary face coordinate, psi is the secondary.
+# From wcslib cscx2s: p[i][j] where result = sum chi^i * psi^j
+const _CSC_INV_P = (
+    (-0.27292696, -0.07629969, -0.22797056,  0.54852384, -0.62930065,  0.25795794,  0.02584375),
+    (-0.02819452, -0.01471565,  0.48051509, -1.74114454,  1.71547508, -0.53022337),
+    ( 0.27058160, -0.56800938,  0.30803317,  0.98938102, -0.83180469),
+    (-0.60441560,  1.50880086, -0.93678576,  0.08693841),
+    ( 0.93412077, -1.41601920,  0.33887446),
+    (-0.63915306,  0.52032238),
+    ( 0.14381585,),
+)
+
+# Forward (s2x) polynomial constants: maps (xf, yf) face coords to (chi, psi).
+# From wcslib cscs2x notation, the formula for chi is:
+#   chi = xf * (gstar + xf^2*(mm*yf^2 - gamma) - yf^2*(d0 + yf^2*d1))
+#         + correction polynomial
+# and symmetrically for psi with xf ↔ yf.
+# The correction polynomial uses p00, p10, p01, p11, p20, p02.
+const _CSC_FWD = (
+    gstar  =  1.37484847732,
+    mm     =  0.004869491981,
+    gamma  = -0.13161671474,
+    omega1 = -0.159596235474,
+    d0     =  0.0759196200467,
+    d1     = -0.0217762490699,
+    p00    =  0.141189631152,
+    p10    =  0.0809701286525,
+    p01    = -0.281528535557,
+    p11    =  0.15384112876,
+    p20    = -0.178251207466,
+    p02    =  0.106959469314,
+)
+
+# Evaluate the CSC forward (xf,yf → chi) single-axis polynomial.
+# Returns chi for axis 1 (xf is primary); swap arguments for psi.
+function _csc_fwd_axis(chi::T, psi::T) where {T <: Real}
+    # WCSLIB 8.9 cscs2x: maps face coords (chi=m/l, psi=n/l) → projected coords.
+    chi2 = chi^2
+    psi2 = psi^2
+    chi2co = one(T) - chi2
+    psi2co = one(T) - psi2
+    chipsi = abs(chi*psi)
+    chi2psi2 = chipsi > T(1e-16) ? chi2*psi2 : zero(T)
+    chi4 = chi2 > T(1e-16) ? chi2^2 : zero(T)
+    psi4 = psi2 > T(1e-16) ? psi2^2 : zero(T)
+
+    gstar  = T(1.37484847732)
+    mm     = T(0.004869491981)
+    gamma  = T(-0.13161671474)
+    omega1 = T(-0.159596235474)
+    d0     = T(0.0759196200467)
+    d1     = T(-0.0217762490699)
+    c00 = T(0.141189631152)
+    c10 = T(0.0809701286525)
+    c01 = T(-0.281528535557)
+    c11 = T(0.15384112876)
+    c20 = T(-0.178251207466)
+    c02 = T(0.106959469314)
+
+    return chi*(chi2 + chi2co*(gstar + psi2*(gamma*chi2co + mm*chi2 +
+           psi2co*(c00 + c10*chi2 + c01*psi2 + c11*chi2psi2 + c20*chi4 +
+           c02*psi4)) + chi2*(omega1 - chi2co*(d0 + d1*chi2))))
+end
+
+# Evaluate the CSC inverse (chi,psi → xf) single-axis polynomial.
+# p is the primary, q is the secondary; swap for yf.
+function _csc_inv_axis(xf::T, psi::T) where {T <: Real}
+    # WCSLIB 8.9 cscx2s: maps projected coords back to face coords.
+    xx = xf^2
+    yy = psi^2
+
+    p00 = T(-0.27292696); p10 = T(-0.07629969); p20 = T(-0.22797056)
+    p30 = T( 0.54852384); p40 = T(-0.62930065); p50 = T( 0.25795794)
+    p60 = T( 0.02584375)
+    p01 = T(-0.02819452); p11 = T(-0.01471565); p21 = T( 0.48051509)
+    p31 = T(-1.74114454); p41 = T( 1.71547508); p51 = T(-0.53022337)
+    p02 = T( 0.27058160); p12 = T(-0.56800938); p22 = T( 0.30803317)
+    p32 = T( 0.98938102); p42 = T(-0.83180469)
+    p03 = T(-0.60441560); p13 = T( 1.50880086); p23 = T(-0.93678576)
+    p33 = T( 0.08693841)
+    p04 = T( 0.93412077); p14 = T(-1.41601920); p24 = T( 0.33887446)
+    p05 = T(-0.63915306); p15 = T( 0.52032238)
+    p06 = T( 0.14381585)
+
+    z0 = p00 + xx*(p10 + xx*(p20 + xx*(p30 + xx*(p40 + xx*(p50 + xx*p60)))))
+    z1 = p01 + xx*(p11 + xx*(p21 + xx*(p31 + xx*(p41 + xx*p51))))
+    z2 = p02 + xx*(p12 + xx*(p22 + xx*(p32 + xx*p42)))
+    z3 = p03 + xx*(p13 + xx*(p23 + xx*p33))
+    z4 = p04 + xx*(p14 + xx*p24)
+    z5 = p05 + xx*p15
+    z6 = p06
+
+    chi_corr = z0 + yy*(z1 + yy*(z2 + yy*(z3 + yy*(z4 + yy*(z5 + yy*z6)))))
+    return xf + xf*(one(T) - xx)*chi_corr
+end
+
+"""
+    native_to_intermediate(::CSC, phi, theta) -> (x, y)
+
+Forward CSC projection.  Paper II, Section 8.2.
+
+The CSC polynomial coefficients are stored as `float` (32-bit) in WCSLIB,
+so results computed here in Float64 differ from Astropy/WCSLIB by up to
+~2 µdeg (≈ 7 mas).  Both implementations are correct within their respective
+precisions.
+"""
+function native_to_intermediate(::CSC, phi::Real, theta::Real)
+    T = _promote_float_type(phi, theta)
+    l, m, n = _sphere_to_uvec(T(phi), T(theta))
+    face, xf, yf = _xyz_to_cube_face(l, m, n)
+    chi = _csc_fwd_axis(xf, yf)
+    psi = _csc_fwd_axis(yf, xf)
+    s = T(_FACESCALE)
+    x = s * (chi + T(_FACE_X0U[face + 1]))
+    y = s * (psi + T(_FACE_Y0U[face + 1]))
+    return x, y
+end
+
+"""
+    intermediate_to_native(::CSC, x, y) -> (phi, theta)
+
+Inverse CSC projection.  Paper II, Section 8.2.
+"""
+function intermediate_to_native(::CSC, x::Real, y::Real)
+    T = _promote_float_type(x, y)
+    face, chi, psi = _cube_xy_to_face(T(x), T(y), T(_FACESCALE))
+    xf = _csc_inv_axis(chi, psi)
+    yf = _csc_inv_axis(psi, chi)
+    l, m, n = _face_to_uvec(face, xf, yf)
+    phi   = atan(m, l)
+    theta = asin(clamp(n, -one(T), one(T)))
+    return phi, theta
+end
+
+function _qsc_forward(xi::T, eta::T, zeco::T, zeta::T) where {T <: Real}
+    # WCSLIB 8.9 qscs2x: raw face components + angular distance → (xf, yf).
+    xf = zero(T)
+    yf = zero(T)
+    if xi != 0 || eta != 0
+        if -xi > abs(eta)
+            omega = eta / xi
+            tau   = one(T) + omega^2
+            xf    = -sqrt(zeco / (one(T) - one(T) / sqrt(one(T) + tau)))
+            yf    = (xf / 15) * (atand(omega) - asind(omega / sqrt(2 * tau)))
+        elseif xi > abs(eta)
+            omega = eta / xi
+            tau   = one(T) + omega^2
+            xf    = sqrt(zeco / (one(T) - one(T) / sqrt(one(T) + tau)))
+            yf    = (xf / 15) * (atand(omega) - asind(omega / sqrt(2 * tau)))
+        elseif -eta >= abs(xi)
+            omega = xi / eta
+            tau   = one(T) + omega^2
+            yf    = -sqrt(zeco / (one(T) - one(T) / sqrt(one(T) + tau)))
+            xf    = (yf / 15) * (atand(omega) - asind(omega / sqrt(2 * tau)))
+        elseif eta >= abs(xi)
+            omega = xi / eta
+            tau   = one(T) + omega^2
+            yf    = sqrt(zeco / (one(T) - one(T) / sqrt(one(T) + tau)))
+            xf    = (yf / 15) * (atand(omega) - asind(omega / sqrt(2 * tau)))
+        end
+    end
+    return xf, yf
+end
+
+# QSC inverse: (chi, psi) ∈ projected coords → (xf, yf).
+# From wcslib qscx2s:
+#   if |chi| >= |psi|: xf = chi / (pi/4 + (1-pi/4)*(chi^2/psi^2 - 1 + psi^2/chi^2))
+#   ... this is the inverse of chi = xf*(pi/4 + (1-pi/4)*yf^2/xf^2)
+# Solving: chi = a*(pi/4 + s*b^2/a^2) = a*pi/4 + s*b^2/a
+# When |a|>=|b|: chi ≈ a*(pi/4) approximately. Solve by Newton:
+function _qsc_inverse(xf::T, yf::T) where {T <: Real}
+    # WCSLIB 8.9 qscx2s: face coords → (zeta, w, omega, direct).
+    if abs(xf) < T(1e-15) && abs(yf) < T(1e-15)
+        return one(T), zero(T), zero(T), true, xf, yf
+    end
+    SQRT2INV = one(T) / sqrt(T(2))
+    direct = abs(xf) > abs(yf)
+    if direct
+        w = 15 * yf / xf
+        omega = sind(w) / (cosd(w) - SQRT2INV)
+        tau = one(T) + omega^2
+        zeco = xf^2 * (one(T) - one(T) / sqrt(one(T) + tau))
+        zeta = one(T) - zeco
+    else
+        w = 15 * xf / yf
+        omega = sind(w) / (cosd(w) - SQRT2INV)
+        tau = one(T) + omega^2
+        zeco = yf^2 * (one(T) - one(T) / sqrt(one(T) + tau))
+        zeta = one(T) - zeco
+    end
+    return zeta, w, omega, direct, xf, yf
+end
+
+"""
+    native_to_intermediate(::QSC, phi, theta) -> (x, y)
+
+Forward QSC projection.  Paper II, Section 8.3.
+"""
+function native_to_intermediate(::QSC, phi::Real, theta::Real)
+    T = _promote_float_type(phi, theta)
+    l, m, n = _sphere_to_uvec(T(phi), T(theta))
+    face, _, _ = _xyz_to_cube_face(l, m, n)
+    zeta = max(abs(l), abs(m), abs(n))
+    zeco = one(T) - zeta
+    # Raw component values per wcslib face switch.
+    if face == 1
+        xi, eta = m, n
+    elseif face == 2
+        xi, eta = -l, n
+    elseif face == 3
+        xi, eta = -m, n
+    elseif face == 4
+        xi, eta = l, n
+    elseif face == 5
+        xi, eta = m, l
+    else
+        xi, eta = m, -l
+    end
+    xf, yf = _qsc_forward(xi, eta, zeco, zeta)
+    s = T(_FACESCALE)
+    x0v = (0.0, 0.0, 2.0, 4.0, 6.0, 0.0)
+    y0v = (2.0, 0.0, 0.0, 0.0, 0.0, -2.0)
+    x = s * (xf + x0v[face + 1])
+    y = s * (yf + y0v[face + 1])
+    return T(x), T(y)
+end
+
+"""
+    intermediate_to_native(::QSC, x, y) -> (phi, theta)
+
+Inverse QSC projection.  Paper II, Section 8.3.
+"""
+function intermediate_to_native(::QSC, x::Real, y::Real)
+    T = _promote_float_type(x, y)
+    face, xf_face, yf_face = _cube_xy_to_face(T(x), T(y), T(_FACESCALE))
+    zeta, w, omega, direct, _, _ = _qsc_inverse(xf_face, yf_face)
+
+    if zeta < -one(T)
+        zeta = -one(T)
+        w = zero(T)
+    else
+        zeco = one(T) - zeta
+        w = sqrt(max(zero(T), zeco * (2 - zeco) / (one(T) + omega^2)))
+    end
+
+    if face == 1
+        l = zeta
+        if direct
+            m = w; if xf_face < 0; m = -m; end
+            n = m * omega
+        else
+            n = w; if yf_face < 0; n = -n; end
+            m = n * omega
+        end
+    elseif face == 2
+        m = zeta
+        if direct
+            l = w; if xf_face > 0; l = -l; end
+            n = -l * omega
+        else
+            n = w; if yf_face < 0; n = -n; end
+            l = -n * omega
+        end
+    elseif face == 3
+        l = -zeta
+        if direct
+            m = w; if xf_face > 0; m = -m; end
+            n = -m * omega
+        else
+            n = w; if yf_face < 0; n = -n; end
+            m = -n * omega
+        end
+    elseif face == 4
+        m = -zeta
+        if direct
+            l = w; if xf_face < 0; l = -l; end
+            n = l * omega
+        else
+            n = w; if yf_face < 0; n = -n; end
+            l = n * omega
+        end
+    elseif face == 5
+        n = -zeta
+        if direct
+            m = w; if xf_face < 0; m = -m; end
+            l = m * omega
+        else
+            l = w; if yf_face < 0; l = -l; end
+            m = l * omega
+        end
+    else  # face == 0
+        n = zeta
+        if direct
+            m = w; if xf_face < 0; m = -m; end
+            l = -m * omega
+        else
+            l = w; if yf_face > 0; l = -l; end
+            m = -l * omega
+        end
+    end
+
+    r = hypot(l, m, n)
+    l /= r; m /= r; n /= r
+    phi = atan(m, l)
+    theta = asin(clamp(n, -one(T), one(T)))
+    return phi, theta
+end
+
+# ──────────────────────────────────────────────────────────────────────────────
+# HPX – HEALPix projection   (Calabretta & Roukema 2007, FITS version)
+# ──────────────────────────────────────────────────────────────────────────────
+#
+# From wcslib hpxset/hpxx2s/hpxs2x (prj.c):
+#   H = pv[1] (default 4), K = pv[2] (default 3)
+#   w[0] = pi/H  (phi step half-width, radians)
+#   w[1] = 2*pi/H  (= 360/H degrees)
+#   w[2] = (K-1)/2  (polar phase)
+#   w[3] = 90*(1 - 1/K)  (equatorial boundary in degrees, y_x)
+#   w[4] = 90  (R2D for normalised coords — scale factor)
+#   w[5] = 1/90  (1/R2D)
+#   w[6] = K/2 (for polar)
+#   s1   = 1 if K mod 2 == 0 (half-pixel shift for even K)
+#
+# Equatorial region (|y_deg| <= w[3]):
+#   sin(theta) = y_deg / 90        → theta = asin(y/90)
+#   phi_rad    = x_deg * D2R       → phi   = x/180*pi
+#
+# Polar region (|y_deg| > w[3]):
+#   From sigma^2 = K*(1 - |y_deg|/90):  (wcslib hpxx2s line ~8095)
+#   sigma = sqrt(K*(1 - |y_deg|/90))
+#   (Note: NOT sqrt(3*(1-...)) for general K – wcslib uses K not 3)
+#   phi_c = w[1] * (floor(x_deg/w[1] + 0.5) + w[2]*0.5 - 0.5 * s1_sign)  [in degrees]
+#   dx    = x_deg - phi_c   [degrees, = displacement from diamond centre]
+#   phi_rad = (phi_c + dx/sigma) * D2R
+#   theta   = asin(1 - sigma^2/K)  [wcslib: sin(theta) = 1 - sigma^2/K]
+#
+# Forward (hpxs2x):
+#   Equatorial: x = phi_deg,  y = 90 * sin(theta)
+#   Polar:      sigma = sqrt(K*(1-|sin(theta)|))
+#               phi_c = nearest diamond centre
+#               x = phi_c + (phi - phi_c)*sigma,  y = ±90*(1 - sigma^2/K)
+
+"""
+    native_to_intermediate(proj::HPX, phi, theta) -> (x, y)
+
+Forward HPX (HEALPix) projection.
+"""
+function native_to_intermediate(proj::HPX, phi::Real, theta::Real)
+    T = _promote_float_type(phi, theta)
+    H  = T(proj.H)
+    K  = T(proj.K)
+    D2R = T(π / 180)
+    R2D = T(180 / π)
+
+    phi_step_deg = T(360) / H           # w[1] in degrees
+    phi_step_rad = T(2π) / H            # w[0] * 2
+    s1 = iseven(proj.K) ? one(T) : zero(T)  # phase shift
+
+    y_x = T(90) * (one(T) - one(T) / K)    # equatorial boundary, degrees
+
+    sin_theta = sin(theta)
+
+    if abs(sin_theta) <= one(T) - one(T) / K
+        # Equatorial region.
+        x = rad2deg(phi)
+        y = T(90) * sin_theta
+    else
+        # Polar region.
+        sigma = sqrt(K * (one(T) - abs(sin_theta)))
+        phi_deg = rad2deg(phi)
+
+        # Find nearest polar diamond centre.
+        # w[2] = (K-1)/2 half-step phase, used as: floor(...) + w[2] - 0.5*(1-s1)
+        w2 = (K - one(T)) / 2
+        phi_c = phi_step_deg * (floor(phi_deg / phi_step_deg + T(0.5)) + w2 - T(0.5) * (one(T) - s1))
+
+        dx = (phi_deg - phi_c) * sigma  # distorted delta-phi
+        x  = phi_c + dx
+        y  = T(90) * (one(T) - sigma^2 / K)
+        sin_theta < 0 && (y = -y)
+    end
+
+    return x, y
+end
+
+"""
+    intermediate_to_native(proj::HPX, x, y) -> (phi, theta)
+
+Inverse HPX (HEALPix) projection.
+"""
+function intermediate_to_native(proj::HPX, x::Real, y::Real)
+    T = _promote_float_type(x, y)
+    H  = T(proj.H)
+    K  = T(proj.K)
+    D2R = T(π / 180)
+
+    phi_step_deg = T(360) / H
+    s1 = iseven(proj.K) ? one(T) : zero(T)
+
+    y_x = T(90) * (one(T) - one(T) / K)   # equatorial boundary, degrees
+
+    if abs(T(y)) <= y_x
+        # Equatorial region.
+        phi   = T(x) * D2R
+        theta = asin(clamp(T(y) / T(90), -one(T), one(T)))
+    else
+        # Polar region.
+        sigma2 = K * (one(T) - abs(T(y)) / T(90))
+        sigma  = sqrt(max(zero(T), sigma2))
+
+        w2 = (K - one(T)) / 2
+        phi_c = phi_step_deg * (floor(T(x) / phi_step_deg + T(0.5)) + w2 - T(0.5) * (one(T) - s1))
+
+        dx    = T(x) - phi_c    # displacement from diamond centre in degrees
+        phi   = (phi_c + (sigma > T(1e-12) ? dx / sigma : zero(T))) * D2R
+
+        sin_theta = one(T) - sigma2 / K
+        sin_theta  = clamp(sin_theta, -one(T), one(T))
+        theta = T(y) >= 0 ? asin(sin_theta) : -asin(sin_theta)
+    end
+
+    return phi, theta
+end
+
+# ──────────────────────────────────────────────────────────────────────────────
+# XPH – HEALPix polar cap projection   (Calabretta & Roukema 2007)
+# ──────────────────────────────────────────────────────────────────────────────
+#
+# From wcslib xphset/xphx2s/xphs2x (prj.c):
+#   Uses H=4, K=3 (standard HEALPix) after a ±45° rotation.
+#   w[0] = 45/sqrt(2)  (= 90 / 2sqrt2, the output scale)
+#   w[1] = 1/w[0]      (inverse scale)
+#   xphset calls prjoff(0, 90°) → so prj->y0 = output at theta=90°
+#
+# The rotation:   xp = (x + y) / sqrt(2),  yp = (y - x) / sqrt(2)
+# Apply HPX(H=4,K=3) to (xp, yp).
+# Inverse rotation: x = (xp - yp) / sqrt(2),  y = (xp + yp) / sqrt(2)
+#
+# Note: wcslib xphs2x forward scales by w[0] = 45/sqrt(2):
+#   xp_raw = intermediate HPX x,  yp_raw = intermediate HPX y
+#   x_out  = (xp_raw - yp_raw) * w[0] / 45  = (xp - yp) / sqrt(2)  [degrees]
+#   y_out  = (xp_raw + yp_raw) * w[0] / 45  = (xp + yp) / sqrt(2)  [degrees]
+
+const _XPH_HPX = HPX(4, 3)
+
+"""
+    native_to_intermediate(::XPH, phi, theta) -> (x, y)
+
+Forward XPH projection.
+"""
+function native_to_intermediate(::XPH, phi::Real, theta::Real)
+    T = _promote_float_type(phi, theta)
+    sqrt2 = sqrt(T(2))
+
+    xp, yp = native_to_intermediate(_XPH_HPX, T(phi), T(theta))
+
+    # Rotate HPX intermediate coords by 45°.
+    x = (T(xp) - T(yp)) / sqrt2
+    y = (T(xp) + T(yp)) / sqrt2
+    return x, y
+end
+
+"""
+    intermediate_to_native(::XPH, x, y) -> (phi, theta)
+
+Inverse XPH projection.
+"""
+function intermediate_to_native(::XPH, x::Real, y::Real)
+    T = _promote_float_type(x, y)
+    sqrt2 = sqrt(T(2))
+
+    # Undo the 45° rotation to recover HPX intermediate coordinates.
+    xp = (T(x) + T(y)) / sqrt2
+    yp = (T(y) - T(x)) / sqrt2
+
+    return intermediate_to_native(_XPH_HPX, xp, yp)
+end
+
+# ──────────────────────────────────────────────────────────────────────────────
 # UnknownProjection – catch-all error
 # ──────────────────────────────────────────────────────────────────────────────
 
