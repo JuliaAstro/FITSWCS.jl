@@ -87,6 +87,22 @@ native_theta0(::PAR) = 0.0
 native_theta0(::MOL) = 0.0
 native_theta0(::PCO) = 0.0
 native_theta0(::AIT) = 0.0
+# Zenithal polynomial
+native_theta0(::ZPN) = 90.0
+native_theta0(::AIR) = 90.0
+# Conic projections: native_theta0 = sigma (the standard parallel).
+native_theta0(p::COP) = p.sigma
+native_theta0(p::COD) = p.sigma
+native_theta0(p::COE) = p.sigma
+native_theta0(p::COO) = p.sigma
+# BON: wcslib calls prjoff(0,0) so native fiducial is the equator (theta=0).
+native_theta0(::BON) = 0.0
+# Quadrilateralized spherical cube / HEALPix
+native_theta0(::TSC) = 0.0
+native_theta0(::CSC) = 0.0
+native_theta0(::QSC) = 0.0
+native_theta0(::HPX) = 0.0
+native_theta0(::XPH) = 90.0
 native_theta0(::UnknownProjection) = 90.0
 
 """

@@ -94,6 +94,18 @@ function projection_from_code(code::AbstractString)
     c == "CAR" && return CAR()
     c == "CEA" && return CEA()
     c == "AIT" && return AIT()
+    c == "ZPN" && return ZPN()
+    c == "AIR" && return AIR()
+    c == "BON" && return BON(45.0)   # will be overridden by projection_from_header
+    c == "COP" && return COP(45.0, 0.0)
+    c == "COD" && return COD(45.0, 0.0)
+    c == "COE" && return COE(45.0, 0.0)
+    c == "COO" && return COO(45.0, 0.0)
+    c == "TSC" && return TSC()
+    c == "CSC" && return CSC()
+    c == "QSC" && return QSC()
+    c == "HPX" && return HPX()
+    c == "XPH" && return XPH()
     return UnknownProjection(c)
 end
 
@@ -149,6 +161,58 @@ function projection_from_header(code::AbstractString, header::AbstractDict,
         mu + lambda != 0.0 ||
             throw(ArgumentError("CYP PV$(lat_axis)_1 + PV$(lat_axis)_2 must be non-zero"))
         return CYP(lambda, mu)
+    end
+
+    # ZPN uses latitude-axis parameters 0..N as polynomial coefficients.
+    if c == "ZPN"
+        alt_str = alt == ' ' ? "" : string(alt)
+        # Collect coefficients up to m=30 (WCSLIB limit).
+        pvs = Float64[]
+        for m in 0:30
+            key = "PV$(lat_axis)_$(m)$(alt_str)"
+            if haskey(header, key)
+                # Extend vector if needed, fill gaps with 0.
+                while length(pvs) < m
+                    push!(pvs, 0.0)
+                end
+                push!(pvs, Float64(header[key]))
+            end
+        end
+        isempty(pvs) && (pvs = [0.0, 1.0])  # default: r = zd (same as ARC)
+        return ZPN(pvs)
+    end
+
+    # AIR uses latitude-axis parameter 1 as theta_b (break latitude, degrees).
+    if c == "AIR"
+        alt_str = alt == ' ' ? "" : string(alt)
+        theta_b = Float64(get(header, "PV$(lat_axis)_1$(alt_str)", 90.0))
+        return AIR(theta_b)
+    end
+
+    # BON uses latitude-axis parameter 1 as theta1 (standard parallel, degrees).
+    if c == "BON"
+        alt_str = alt == ' ' ? "" : string(alt)
+        theta1 = Float64(get(header, "PV$(lat_axis)_1$(alt_str)", 45.0))
+        return BON(theta1)
+    end
+
+    # Conic projections: PVlat_1 = sigma (deg), PVlat_2 = delta (deg, default 0).
+    if c in ("COP", "COD", "COE", "COO")
+        alt_str = alt == ' ' ? "" : string(alt)
+        sigma = Float64(get(header, "PV$(lat_axis)_1$(alt_str)", 45.0))
+        delta = Float64(get(header, "PV$(lat_axis)_2$(alt_str)", 0.0))
+        c == "COP" && return COP(sigma, delta)
+        c == "COD" && return COD(sigma, delta)
+        c == "COE" && return COE(sigma, delta)
+        c == "COO" && return COO(sigma, delta)
+    end
+
+    # HPX uses PVlat_1 = H (default 4) and PVlat_2 = K (default 3).
+    if c == "HPX"
+        alt_str = alt == ' ' ? "" : string(alt)
+        H = Int(get(header, "PV$(lat_axis)_1$(alt_str)", 4))
+        K = Int(get(header, "PV$(lat_axis)_2$(alt_str)", 3))
+        return HPX(H, K)
     end
 
     # Other supported projections currently have no parsed PV parameters.
