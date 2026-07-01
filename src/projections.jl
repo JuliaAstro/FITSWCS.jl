@@ -374,12 +374,15 @@ Inverse CYP projection.  `lambda` and `mu` are projection parameters.
 """
 function intermediate_to_native(proj::CYP, x::Real, y::Real)
     T = _promote_float_type(x, y)
-    # Longitude scales linearly by the cylindrical perspective lambda.
-    phi = deg2rad(x) / T(proj.lambda)
+    lam = T(proj.lambda)
+    mu  = T(proj.mu)
 
-    # Solve the perspective ordinate relation in closed form.
-    eta = deg2rad(y) / (T(proj.mu) + T(proj.lambda))
-    theta = atan(eta, one(T)) + asin(clamp((eta * T(proj.mu)) / hypot(eta, one(T)), -one(T), one(T)))
+    # WCSLIB 8.9 cypx2s: phi_rad = (x / mu) * D2R  (w[1] = 1/mu, x0=0).
+    phi = deg2rad(x) / mu
+
+    # WCSLIB: eta = y / (R2D*(lambda+mu)), then atan2d(eta,1) + asind(eta*lambda/√(eta²+1)).
+    eta = deg2rad(y) / (lam + mu)
+    theta = atan(eta, one(T)) + asin(clamp((eta * lam) / hypot(eta, one(T)), -one(T), one(T)))
     return phi, theta
 end
 
@@ -390,15 +393,18 @@ Forward CYP projection.
 """
 function native_to_intermediate(proj::CYP, phi::Real, theta::Real)
     T = _promote_float_type(phi, theta)
-    # Wrap longitude locally before applying the linear cylindrical scale.
-    phi_w = _wrap_native_phi(phi)
-    x = rad2deg(T(proj.lambda) * phi_w)
+    lam = T(proj.lambda)
+    mu  = T(proj.mu)
 
-    # Project latitude by the perspective cylinder relation.
-    denom = T(proj.mu) + cos(theta)
+    # WCSLIB 8.9 cyps2x: x = mu * phi_deg  (w[0] = mu, x0=0).
+    phi_w = _wrap_native_phi(phi)
+    x = rad2deg(mu * phi_w)
+
+    # WCSLIB: y = R2D*(lambda+mu)*sin(theta) / (lambda + cos(theta)).
+    denom = lam + cos(theta)
     denom != 0.0 ||
-        error("CYP projection: singularity where mu + cos(theta) = 0")
-    y = rad2deg((T(proj.mu) + T(proj.lambda)) * sin(theta) / denom)
+        error("CYP projection: singularity where lambda + cos(theta) = 0")
+    y = rad2deg((lam + mu) * sin(theta) / denom)
     return x, y
 end
 
@@ -1786,7 +1792,7 @@ function native_to_intermediate(::QSC, phi::Real, theta::Real)
     l, m, n = _sphere_to_uvec(T(phi), T(theta))
     face, _, _ = _xyz_to_cube_face(l, m, n)
     zeta = max(abs(l), abs(m), abs(n))
-    zeco = one(T) - zeta
+    zeco = 1 - zeta
     # Raw component values per wcslib face switch.
     if face == 1
         xi, eta = m, n
@@ -1824,8 +1830,8 @@ function intermediate_to_native(::QSC, x::Real, y::Real)
         zeta = -one(T)
         w = zero(T)
     else
-        zeco = one(T) - zeta
-        w = sqrt(max(zero(T), zeco * (2 - zeco) / (one(T) + omega^2)))
+        zeco = 1 - zeta
+        w = sqrt(max(zero(T), zeco * (2 - zeco) / (1 + omega^2)))
     end
 
     if face == 1
@@ -1895,74 +1901,79 @@ end
 # HPX – HEALPix projection   (Calabretta & Roukema 2007, FITS version)
 # ──────────────────────────────────────────────────────────────────────────────
 #
-# From wcslib hpxset/hpxx2s/hpxs2x (prj.c):
-#   H = pv[1] (default 4), K = pv[2] (default 3)
-#   w[0] = pi/H  (phi step half-width, radians)
-#   w[1] = 2*pi/H  (= 360/H degrees)
-#   w[2] = (K-1)/2  (polar phase)
-#   w[3] = 90*(1 - 1/K)  (equatorial boundary in degrees, y_x)
-#   w[4] = 90  (R2D for normalised coords — scale factor)
-#   w[5] = 1/90  (1/R2D)
-#   w[6] = K/2 (for polar)
-#   s1   = 1 if K mod 2 == 0 (half-pixel shift for even K)
+# WCSLIB 8.9 hpxset/hpxx2s/hpxs2x.  Parameters H = pv[1] (default 4),
+# K = pv[2] (default 3).  Derived constants:
+#   w[2] = (K-1)/K            sin(theta) equatorial boundary (= 2/3 for K=3)
+#   w[3] = 90*K/H             scale: y = w[3]*sin(theta) in equatorial zone
+#   w[4] = (K+1)/2            half the number of polar diamonds per cap
+#   w[5] = 90*(K-1)/H         y boundary between equatorial and polar (45° for H=4,K=3)
+#   w[6] = 180/H              longitude step (= 45° for H=4)
+#   w[8] = w[3]*w[0]          = w[3] (since w[0]=1 for R2D)
+#   w[9] = w[6]*w[0]          = w[6]
 #
-# Equatorial region (|y_deg| <= w[3]):
-#   sin(theta) = y_deg / 90        → theta = asin(y/90)
-#   phi_rad    = x_deg * D2R       → phi   = x/180*pi
+# Equatorial: |y| ≤ w[5],  |sin(theta)| ≤ w[2]
+#   Forward:  x = phi,  y = w[8]*sin(theta)
+#   Inverse:  theta = asind(y/w[3])
 #
-# Polar region (|y_deg| > w[3]):
-#   From sigma^2 = K*(1 - |y_deg|/90):  (wcslib hpxx2s line ~8095)
-#   sigma = sqrt(K*(1 - |y_deg|/90))
-#   (Note: NOT sqrt(3*(1-...)) for general K – wcslib uses K not 3)
-#   phi_c = w[1] * (floor(x_deg/w[1] + 0.5) + w[2]*0.5 - 0.5 * s1_sign)  [in degrees]
-#   dx    = x_deg - phi_c   [degrees, = displacement from diamond centre]
-#   phi_rad = (phi_c + dx/sigma) * D2R
-#   theta   = asin(1 - sigma^2/K)  [wcslib: sin(theta) = 1 - sigma^2/K]
-#
-# Forward (hpxs2x):
-#   Equatorial: x = phi_deg,  y = 90 * sin(theta)
-#   Polar:      sigma = sqrt(K*(1-|sin(theta)|))
-#               phi_c = nearest diamond centre
-#               x = phi_c + (phi - phi_c)*sigma,  y = ±90*(1 - sigma^2/K)
+# Polar:
+#   Forward:  sigma = sqrt(K*(1-|sin|)),  y = ±w[9]*(w[4]-sigma)
+#             x_c = diamond centre,  x = x_c + (phi - x_c)*sigma
+#   Inverse:  sigma = w[4] - |y|/w[6],  sin(theta) = ±(1-sigma²/K)
+#             phi = x + (x - x_c)*(1/sigma - 1) with diamond alignment
 
 """
     native_to_intermediate(proj::HPX, phi, theta) -> (x, y)
 
-Forward HPX (HEALPix) projection.
+Forward HPX (HEALPix) projection.  WCSLIB 8.9 hpxs2x.
 """
 function native_to_intermediate(proj::HPX, phi::Real, theta::Real)
     T = _promote_float_type(phi, theta)
-    H  = T(proj.H)
-    K  = T(proj.K)
-    D2R = T(π / 180)
-    R2D = T(180 / π)
+    H = T(proj.H)
+    K = T(proj.K)
 
-    phi_step_deg = T(360) / H           # w[1] in degrees
-    phi_step_rad = T(2π) / H            # w[0] * 2
-    s1 = iseven(proj.K) ? one(T) : zero(T)  # phase shift
+    # WCSLIB w[] array: w[0]=1, w[1]=1 for r0=R2D.
+    w2 = (K - 1) / K   # sin(theta) boundary
+    w3 = 90 * K / H    # equatorial scale
+    w4 = (K + 1) / 2   # half polar diamonds
+    w9 = 180 / H       # w[6]*w[0] = 180/H
 
-    y_x = T(90) * (one(T) - one(T) / K)    # equatorial boundary, degrees
+    sinth = sin(theta)
+    abs_sin = abs(sinth)
 
-    sin_theta = sin(theta)
+    if abs_sin <= w2
+        # Equatorial regime.  x = phi (w[0]=1, x0=0), y = w[3]*sin(theta).
+        return rad2deg(phi), w3 * sinth
+    end
 
-    if abs(sin_theta) <= one(T) - one(T) / K
-        # Equatorial region.
-        x = rad2deg(phi)
-        y = T(90) * sin_theta
-    else
-        # Polar region.
-        sigma = sqrt(K * (one(T) - abs(sin_theta)))
-        phi_deg = rad2deg(phi)
+    # Polar regime.
+    sigma = sqrt(K * (1 - abs_sin))
+    m = proj.H % 2    # WCSLIB: ((int)(H+0.5))%2 — 0 for even H
+    n = proj.K % 2    # WCSLIB: ((int)(K+0.5))%2 — 1 for odd K
+    offset = (n != 0 || sinth > 0) ? 0 : 1
 
-        # Find nearest polar diamond centre.
-        # w[2] = (K-1)/2 half-step phase, used as: floor(...) + w[2] - 0.5*(1-s1)
-        w2 = (K - one(T)) / 2
-        phi_c = phi_step_deg * (floor(phi_deg / phi_step_deg + T(0.5)) + w2 - T(0.5) * (one(T) - s1))
+    phi_deg = rad2deg(phi)
+    # Diamond centre: x_c = -180 + (2*floor((phi+180)/360*H) + 1) * 180/H
+    w7 = H / 360
+    phi_c = -180 + (2 * floor((phi_deg + 180) * w7) + 1) * w9
+    # phi - phi_c
+    dx = phi_deg - phi_c
 
-        dx = (phi_deg - phi_c) * sigma  # distorted delta-phi
-        x  = phi_c + dx
-        y  = T(90) * (one(T) - sigma^2 / K)
-        sin_theta < 0 && (y = -y)
+    xi = sigma - 1                      # distortion factor
+    x = phi_deg + dx * xi                    # x = phi + (phi-phi_c)*(sigma-1)
+    y = w9 * (w4 - sigma)                    # base y
+    if sinth < 0
+        y = -y
+    end
+
+    # Southern half-facet offset for even K
+    if offset != 0
+        h = floor(Int, phi_deg / w9) + m
+        y += isodd(h) ? -w9 : w9
+    end
+
+    # Put phi=180 meridian in expected place
+    if x > 180
+        x = 360 - x
     end
 
     return x, y
@@ -1971,37 +1982,60 @@ end
 """
     intermediate_to_native(proj::HPX, x, y) -> (phi, theta)
 
-Inverse HPX (HEALPix) projection.
+Inverse HPX (HEALPix) projection.  WCSLIB 8.9 hpxx2s.
 """
 function intermediate_to_native(proj::HPX, x::Real, y::Real)
     T = _promote_float_type(x, y)
-    H  = T(proj.H)
-    K  = T(proj.K)
-    D2R = T(π / 180)
+    H = T(proj.H)
+    K = T(proj.K)
 
-    phi_step_deg = T(360) / H
-    s1 = iseven(proj.K) ? one(T) : zero(T)
+    # WCSLIB w[] array (w[0]=1, w[1]=1 for r0=R2D).
+    w3 = 90 * K / H  # equatorial scale
+    w4 = (K + 1) / 2 # half polar diamonds
+    w5 = 90 * (K - 1) / H  # |y| equatorial boundary
+    w6 = 180 / H           # longitude step
+    w9 = w6                # w[6]*w[0]
+    w7 = H / 360
 
-    y_x = T(90) * (one(T) - one(T) / K)   # equatorial boundary, degrees
+    absy = abs(y)
 
-    if abs(T(y)) <= y_x
-        # Equatorial region.
-        phi   = T(x) * D2R
-        theta = asin(clamp(T(y) / T(90), -one(T), one(T)))
+    if absy <= w5
+        # Equatorial regime.
+        phi = deg2rad(x)
+        theta = asin(clamp(y / w3, -one(T), one(T)))
+        return phi, theta
+    end
+
+    # Polar regime.
+    n = proj.K % 2    # WCSLIB: ((int)(K+0.5))%2 — 1 for odd K
+    m = proj.H % 2    # WCSLIB: ((int)(H+0.5))%2 — 0 for even H
+    offset = (n != 0 || y > 0) ? 0 : 1
+
+    sigma = w4 - absy / w6
+    y_positive = y >= 0
+
+    if sigma == 0
+        sin_theta = one(T)
     else
-        # Polar region.
-        sigma2 = K * (one(T) - abs(T(y)) / T(90))
-        sigma  = sqrt(max(zero(T), sigma2))
+        sin_theta = 1 - sigma^2 / K
+        sin_theta = clamp(sin_theta, -one(T), one(T))
+    end
+    theta = y_positive ? asin(sin_theta) : -asin(sin_theta)
 
-        w2 = (K - one(T)) / 2
-        phi_c = phi_step_deg * (floor(T(x) / phi_step_deg + T(0.5)) + w2 - T(0.5) * (one(T) - s1))
+    # Diamond centre: x_c = -180 + (2*floor((x+180)/360*H) + 1) * 180/H
+    phi_c = -180 + (2 * floor((x + 180) * w7) + 1) * w6
+    dx = x - phi_c                              # x - x_c
 
-        dx    = T(x) - phi_c    # displacement from diamond centre in degrees
-        phi   = (phi_c + (sigma > T(1e-12) ? dx / sigma : zero(T))) * D2R
+    # Southern half-facet offset
+    if offset != 0
+        h = floor(Int, x / w6) + m
+        dx += isodd(h) ? w6 : -w6
+    end
 
-        sin_theta = one(T) - sigma2 / K
-        sin_theta  = clamp(sin_theta, -one(T), one(T))
-        theta = T(y) >= 0 ? asin(sin_theta) : -asin(sin_theta)
+    if sigma > 0
+        phi = deg2rad(x + dx * (1 / sigma - 1))
+    else
+        phi = zero(T)
     end
 
     return phi, theta
@@ -2011,54 +2045,126 @@ end
 # XPH – HEALPix polar cap projection   (Calabretta & Roukema 2007)
 # ──────────────────────────────────────────────────────────────────────────────
 #
-# From wcslib xphset/xphx2s/xphs2x (prj.c):
-#   Uses H=4, K=3 (standard HEALPix) after a ±45° rotation.
-#   w[0] = 45/sqrt(2)  (= 90 / 2sqrt2, the output scale)
-#   w[1] = 1/w[0]      (inverse scale)
-#   xphset calls prjoff(0, 90°) → so prj->y0 = output at theta=90°
-#
-# The rotation:   xp = (x + y) / sqrt(2),  yp = (y - x) / sqrt(2)
-# Apply HPX(H=4,K=3) to (xp, yp).
-# Inverse rotation: x = (xp - yp) / sqrt(2),  y = (xp + yp) / sqrt(2)
-#
-# Note: wcslib xphs2x forward scales by w[0] = 45/sqrt(2):
-#   xp_raw = intermediate HPX x,  yp_raw = intermediate HPX y
-#   x_out  = (xp_raw - yp_raw) * w[0] / 45  = (xp - yp) / sqrt(2)  [degrees]
-#   y_out  = (xp_raw + yp_raw) * w[0] / 45  = (xp + yp) / sqrt(2)  [degrees]
-
-const _XPH_HPX = HPX(4, 3)
+# WCSLIB 8.9 xphset/xphx2s/xphs2x.  XPH presents the north HEALPix polar cap
+# as a rotated diamond covering ±90° in (x, y).  It uses its own scaling
+# (w[0] = R2D/√2), a fiducial offset at (0°, 90°), and distinct quadrant logic.
+# Derived constants for standard r0 = R2D:
+#   w[0] = R2D / √2  ≈ 40.52   w[1] = 1/w[0]
+#   w[2] = 2/3                 w[4] = √(2/3) * R2D  ≈ 60.96
+#   w[5] = 90 - 1e-4*w[4]     w[6] = √1.5 * D2R    ≈ 0.0215
 
 """
     native_to_intermediate(::XPH, phi, theta) -> (x, y)
 
-Forward XPH projection.
+Forward XPH projection.  WCSLIB 8.9 xphs2x.
 """
 function native_to_intermediate(::XPH, phi::Real, theta::Real)
     T = _promote_float_type(phi, theta)
-    sqrt2 = sqrt(T(2))
 
-    xp, yp = native_to_intermediate(_XPH_HPX, T(phi), T(theta))
+    w0 = 1 / sqrt(T(2))
+    w2 = T(2) / T(3)
+    w4 = rad2deg(sqrt(w2))
+    w5 = 90 - T(1e-4) * w4
+    w6 = deg2rad(sqrt(T(1.5)))
 
-    # Rotate HPX intermediate coords by 45°.
-    x = (T(xp) - T(yp)) / sqrt2
-    y = (T(xp) + T(yp)) / sqrt2
+    sinthe = sin(theta)
+    abssin = abs(sinthe)
+
+    chi = rad2deg(phi)
+    if abs(chi) >= 180
+        chi = mod(chi, 360)
+        if chi < -180
+            chi += 360
+        elseif chi >= 180
+            chi -= 360
+        end
+    end
+    chi += 180
+    psi = mod(chi, 90)
+    chi -= 180
+
+    if abssin <= w2
+        xi = psi
+        eta = T(67.5) * sinthe
+    else
+        sigma = if theta < w5
+            sqrt(3 * (1 - abssin))
+        else
+            (90 - theta) * w6
+        end
+        xi  = 45 + (psi - 45) * sigma
+        eta = 45 * (2 - sigma)
+        if sinthe < 0
+            eta = -eta
+        end
+    end
+
+    xi -= 45
+    eta -= 90
+
+    if chi < -90
+        x = w0 * (-xi + eta);  y = w0 * (-xi - eta)
+    elseif chi < 0
+        x = w0 * ( xi + eta);  y = w0 * (-xi + eta)
+    elseif chi < 90
+        x = w0 * ( xi - eta);  y = w0 * ( xi + eta)
+    else
+        x = w0 * (-xi - eta);  y = w0 * ( xi - eta)
+    end
     return x, y
 end
 
 """
     intermediate_to_native(::XPH, x, y) -> (phi, theta)
 
-Inverse XPH projection.
+Inverse XPH projection.  WCSLIB 8.9 xphx2s.
 """
 function intermediate_to_native(::XPH, x::Real, y::Real)
     T = _promote_float_type(x, y)
-    sqrt2 = sqrt(T(2))
 
-    # Undo the 45° rotation to recover HPX intermediate coordinates.
-    xp = (T(x) + T(y)) / sqrt2
-    yp = (T(y) - T(x)) / sqrt2
+    w0 = inv(sqrt(T(2)))
+    w0i = w0    # w[1] = w[0] = 1/√2 in WCSLIB xphset
+    w4 = rad2deg(sqrt(T(2) / T(3)))
 
-    return intermediate_to_native(_XPH_HPX, xp, yp)
+    xr = x * w0i
+    yr = y * w0i
+
+    if xr <= 0 && yr > 0
+        xi1  = -xr - yr;  eta1 =  xr - yr;  phi_base = -T(180)
+    elseif xr < 0 && yr <= 0
+        xi1  =  xr - yr;  eta1 =  xr + yr;  phi_base = -T(90)
+    elseif xr >= 0 && yr < 0
+        xi1  =  xr + yr;  eta1 = -xr + yr;  phi_base = T(0)
+    else
+        xi1  = -xr + yr;  eta1 = -xr - yr;  phi_base = T(90)
+    end
+
+    xi = xi1  + 45
+    eta = eta1 + 90
+    abseta = abs(eta)
+
+    if abseta <= 45
+        phi = deg2rad(phi_base + xi)
+        theta = asin(clamp(eta / T(67.5), -one(T), one(T)))
+    elseif abseta <= 90
+        sigma = (90 - abseta) / 45
+        if xr == 0
+            phi = yr <= 0 ? zero(T) : _pi(T)
+        elseif yr == 0
+            phi = xr < 0 ? -_halfpi(T) : _halfpi(T)
+        else
+            phi = deg2rad(phi_base + 45 + xi1 / sigma)
+        end
+        theta_abs = if sigma < T(1e-4)
+            _halfpi(T) - sigma * deg2rad(w4)
+        else
+            asin(1 - sigma^2 / 3)
+        end
+        theta = eta >= 0 ? theta_abs : -theta_abs
+    else
+        error("XPH: point outside valid domain")
+    end
+    return phi, theta
 end
 
 # ──────────────────────────────────────────────────────────────────────────────
