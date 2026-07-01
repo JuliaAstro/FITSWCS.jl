@@ -1723,9 +1723,9 @@ end
 Forward CSC projection.  Paper II, Section 8.2.
 
 The CSC polynomial coefficients are stored as `float` (32-bit) in WCSLIB,
-so results computed here in Float64 differ from Astropy/WCSLIB by up to
-~2 µdeg (≈ 7 mas).  Both implementations are correct within their respective
-precisions.
+while every other projection uses `double` (64-bit).  Consequently Astropy /
+WCSLIB compute CSC at single precision, and our Float64 evaluation differs by
+3–9 mas.  Both implementations are correct within their respective precisions.
 """
 function native_to_intermediate(::CSC, phi::Real, theta::Real)
     T = _promote_float_type(phi, theta)
