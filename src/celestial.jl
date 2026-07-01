@@ -72,6 +72,7 @@ For all zenithal projections this is 90°.
 native_theta0(::AZP) = 90.0
 native_theta0(::SZP) = 90.0
 native_theta0(::TAN) = 90.0
+native_theta0(::TPV) = 90.0   # TPV is TAN + polynomial, same native frame
 native_theta0(::SIN) = 90.0
 native_theta0(::STG) = 90.0
 native_theta0(::ARC) = 90.0

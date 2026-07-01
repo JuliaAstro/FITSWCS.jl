@@ -1411,7 +1411,7 @@ end
 
 # ──────────────────────────────────────────────────────────────────────────────
 @testset "Unknown projection raises error on transform" begin
-    proj = UnknownProjection("TPV")
+    proj = UnknownProjection("XXX")
     @test_throws ErrorException intermediate_to_native(proj, 0.0, 0.0)
     @test_throws ErrorException native_to_intermediate(proj, 0.0, 1.0)
 end
@@ -1716,6 +1716,278 @@ end
         @test FITSWCS._reduce_lat(1.0) isa Float64
         @test FITSWCS._reduce_lat(1.0f0) isa Float32
         @test FITSWCS._reduce_lat(1) isa Float64
+    end
+
+    # ──────────────────────────────────────────────────────────────────────────
+    # TPV/TPD distortion
+    # ──────────────────────────────────────────────────────────────────────────
+
+    @testset "TPD term table" begin
+        terms = FITSWCS._TPD_TERMS
+        @test length(terms) == 60
+        # Spot-check the table entries (m is 0-based, Julia index is m+1).
+        @test terms[1]  == (:mono, 0, 0)   # m=0: constant
+        @test terms[2]  == (:mono, 1, 0)   # m=1: x
+        @test terms[3]  == (:mono, 0, 1)   # m=2: y
+        @test terms[4]  == (:radial, 1)    # m=3: r
+        @test terms[5]  == (:mono, 2, 0)   # m=4: x²
+        @test terms[6]  == (:mono, 1, 1)   # m=5: xy
+        @test terms[7]  == (:mono, 0, 2)   # m=6: y²
+        @test terms[8]  == (:mono, 3, 0)   # m=7: x³
+        @test terms[9]  == (:mono, 2, 1)   # m=8: x²y
+        @test terms[10] == (:mono, 1, 2)   # m=9: xy²
+        @test terms[11] == (:mono, 0, 3)   # m=10: y³
+        @test terms[12] == (:radial, 3)    # m=11: r³
+    end
+
+    @testset "TPV polynomial evaluation" begin
+        # Identity coefficients: should return input unchanged.
+        xcoeff = Float64[0.0, 1.0]          # x' = x
+        ycoeff = Float64[0.0, 0.0, 1.0]     # y' = y
+        @test FITSWCS._evaluate_tpv_polynomial(xcoeff, 1.5, 2.5) ≈ 1.5
+        @test FITSWCS._evaluate_tpv_polynomial(ycoeff, 1.5, 2.5) ≈ 2.5
+
+        # Quadratic terms: xcoeff[m=4] = x² coefficient.
+        xc2 = Float64[0.0, 1.0, 0.0, 0.0, 1e-6]  # m=0..4: x' = x + 1e-6·x²
+        yc2 = Float64[0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1e-6]  # m=0..6: y' = y + 1e-6·y²
+        @test FITSWCS._evaluate_tpv_polynomial(xc2, 2.0, 0.0) ≈ 2.0 + 4e-6
+        @test FITSWCS._evaluate_tpv_polynomial(yc2, 0.0, 3.0) ≈ 3.0 + 9e-6
+
+        # Gapped coefficients: skip m indices with zero fill.
+        xc_gap = zeros(Float64, 20)
+        xc_gap[2] = 1.0           # m=1: x
+        xc_gap[12] = 1e-6         # m=11: r³ = (x²+y²)^(3/2)
+        val = FITSWCS._evaluate_tpv_polynomial(xc_gap, 3.0, 4.0)
+        @test val ≈ 3.0 + 1e-6 * 125.0  # r³ = 5³ = 125
+    end
+
+    @testset "TPV inverse" begin
+        xcoeff = Float64[0.0, 1.0]
+        ycoeff = Float64[0.0, 0.0, 1.0]
+        # Identity: inverse recovers target.
+        u, v = FITSWCS._tpv_inverse(xcoeff, ycoeff, 5.0, -3.0)
+        @test u ≈ 5.0
+        @test v ≈ -3.0
+
+        # Cubic distortion on x: x' = x + 1e-5·x³
+        xc = zeros(Float64, 8)
+        xc[2] = 1.0      # m=1: x
+        xc[8] = 1e-5     # m=7: x³
+        yc = Float64[0.0, 0.0, 1.0]
+        target = 2.0 + 1e-5 * 8.0  # 2 + 1e-5*8
+        u, v = FITSWCS._tpv_inverse(xc, yc, target, 0.0)
+        @test u ≈ 2.0  atol=1e-10
+        @test v ≈ 0.0  atol=1e-10
+
+        # Divergent polynomial (negative identity: x' = -x).
+        # Fixed-point iteration u_{k+1} = u_k - (-u_k - target) = 2*u_k + target
+        # diverges monotonically.  Should warn and return the best estimate.
+        xc_div = Float64[0.0, -1.0]  # x' = -x
+        @test_warn "diverging" FITSWCS._tpv_inverse(xc_div, yc, 10.0, 0.0)
+    end
+
+    @testset "TPV projection round-trip" begin
+        # Identity TPV matches TAN.
+        tpv0 = TPV()
+        @test FITSWCS.native_theta0(tpv0) == 90.0
+        @test FITSWCS.native_phi0(tpv0) == 0.0
+
+        # Round-trip: intermediate → native → intermediate.
+        x, y = native_to_intermediate(tpv0, 0.3, deg2rad(80.0))
+        phi, theta = intermediate_to_native(tpv0, x, y)
+        @test phi ≈ 0.3 atol=1e-10
+        @test theta ≈ deg2rad(80.0) atol=1e-10
+
+        # Non-trivial TPV: x² term on x, y² term on y.
+        xc = Float64[0.0, 1.0, 0.0, 0.0, 5e-6]   # x' = x + 5e-6·x²
+        yc = Float64[0.0, 0.0, 1.0, 0.0, 0.0, 0.0, -3e-6]  # y' = y - 3e-6·y²
+        tpv1 = TPV(xc, yc)
+        for _ in 1:5
+            phi = (rand() - 0.5) * 0.1
+            theta = deg2rad(75.0 + 10.0 * rand())
+            x, y = native_to_intermediate(tpv1, phi, theta)
+            phi2, theta2 = intermediate_to_native(tpv1, x, y)
+            @test phi2 ≈ phi atol=1e-10
+            @test theta2 ≈ theta atol=1e-10
+        end
+    end
+
+    @testset "TPV header parsing" begin
+        # Minimal TPV header (no PV keywords → identity).
+        hdr = Dict{String,Any}(
+            "NAXIS" => 2,
+            "CTYPE1" => "RA---TPV", "CTYPE2" => "DEC--TPV",
+            "CRPIX1" => 256.0, "CRPIX2" => 256.0,
+            "CRVAL1" => 83.8221, "CRVAL2" => -5.3911,
+            "CDELT1" => -2.7778e-4, "CDELT2" => 2.7778e-4,
+        )
+        wcs = from_header(hdr)
+        @test wcs.projection isa TPV
+        # Should behave like TAN with no extra distortion.
+        pix = [256.0, 256.0]
+        world = pixel_to_world(wcs, pix)
+        @test world[1] ≈ 83.8221  atol=1e-4
+        @test world[2] ≈ -5.3911  atol=1e-4
+
+        # TPV with PV coefficients.
+        hdr2 = Dict{String,Any}(
+            "NAXIS" => 2,
+            "CTYPE1" => "RA---TPV", "CTYPE2" => "DEC--TPV",
+            "CRPIX1" => 128.0, "CRPIX2" => 96.0,
+            "CRVAL1" => 120.0, "CRVAL2" => 35.0,
+            "CDELT1" => -0.05, "CDELT2" => 0.05,
+            "PV1_1" => 1.0,     # identity x term
+            "PV1_4" => 1e-6,    # x² term on axis 1
+            "PV2_2" => 1.0,     # identity y term
+            "PV2_6" => -2e-6,   # y² term on axis 2
+        )
+        wcs2 = from_header(hdr2)
+        t = wcs2.projection
+        @test t isa TPV
+        @test t.xcoeff[1] == 0.0     # m=0 (constant), zero-filled gap
+        @test t.xcoeff[2] == 1.0     # m=1 (x)
+        @test t.xcoeff[5] == 1e-6    # m=4 (x²)
+        @test t.ycoeff[3] == 1.0     # m=2 (y)
+        @test t.ycoeff[7] == -2e-6   # m=6 (y²)
+
+        # Round-trip at reference pixel.
+        pix2 = [128.0, 96.0]
+        world2 = pixel_to_world(wcs2, pix2)
+        pix2b = world_to_pixel(wcs2, world2)
+        @test pix2b ≈ pix2  atol=1e-10
+
+        # TPD CTYPE also works.
+        hdr3 = Dict{String,Any}(
+            "NAXIS" => 2,
+            "CTYPE1" => "RA---TPD", "CTYPE2" => "DEC--TPD",
+            "CRPIX1" => 256.0, "CRPIX2" => 256.0,
+            "CRVAL1" => 45.0, "CRVAL2" => 30.0,
+            "CDELT1" => -0.01, "CDELT2" => 0.01,
+        )
+        wcs3 = from_header(hdr3)
+        @test wcs3.projection isa TPV
+    end
+
+    @testset "SCAMP compatibility" begin
+        # Pre-2012 SCAMP: CTYPE=-TAN with PVi_j (j≥5) → -TPV.
+        hdr_pre = Dict{String,Any}(
+            "NAXIS" => 2,
+            "CTYPE1" => "RA---TAN", "CTYPE2" => "DEC--TAN",
+            "CRPIX1" => 256.0, "CRPIX2" => 256.0,
+            "CRVAL1" => 83.8221, "CRVAL2" => -5.3911,
+            "CDELT1" => -2.7778e-4, "CDELT2" => 2.7778e-4,
+            "PV1_1" => 1.0,     # TPV coefficients hiding as TAN
+            "PV1_5" => 1e-6,    # j=5 signals SCAMP
+            "PV2_2" => 1.0,
+        )
+        wcs_pre = from_header(hdr_pre)
+        @test wcs_pre.projection isa TPV
+
+        # TAN with only low-index PV keywords (j < 5) is NOT misdetected.
+        hdr_tan_low = Dict{String,Any}(
+            "NAXIS" => 2,
+            "CTYPE1" => "RA---TAN", "CTYPE2" => "DEC--TAN",
+            "CRPIX1" => 256.0, "CRPIX2" => 256.0,
+            "CRVAL1" => 83.8221, "CRVAL2" => -5.3911,
+            "CDELT1" => -2.7778e-4, "CDELT2" => 2.7778e-4,
+            "PV1_1" => 0.0,    # j=1 — low, should not trigger SCAMP
+            "PV1_2" => 0.0,    # j=2
+            "PV2_3" => 0.0,    # j=3
+            "PV2_4" => 0.0,    # j=4 — highest sub-threshold index
+        )
+        wcs_tan_low = from_header(hdr_tan_low)
+        @test wcs_tan_low.projection isa TAN
+
+        # TPV + SIP: SIP keywords stripped (SCAMP rule).
+        hdr_sip = Dict{String,Any}(
+            "NAXIS" => 2,
+            "CTYPE1" => "RA---TPV", "CTYPE2" => "DEC--TPV",
+            "CRPIX1" => 256.0, "CRPIX2" => 256.0,
+            "CRVAL1" => 83.8221, "CRVAL2" => -5.3911,
+            "CDELT1" => -2.7778e-4, "CDELT2" => 2.7778e-4,
+            "A_ORDER" => 2, "B_ORDER" => 2,
+            "A_0_1" => 1e-5, "B_0_1" => -2e-5,
+        )
+        wcs_sip = from_header(hdr_sip)
+        @test wcs_sip.projection isa TPV
+        @test wcs_sip.sip === nothing   # SIP was stripped
+    end
+
+    @testset "TPV Float32 type stability" begin
+        # Polynomial eval in Float32.
+        xc32 = Float32[0.0, 1.0]
+        yc32 = Float32[0.0, 0.0, 1.0]
+        @test @inferred(FITSWCS._evaluate_tpv_polynomial(xc32, 1.0f0, 2.0f0)) isa Float32
+
+        # Inverse in Float32.
+        u, v = @inferred FITSWCS._tpv_inverse(xc32, yc32, 3.0f0, 4.0f0)
+        @test u isa Float32
+        @test v isa Float32
+
+        # Projection functions in Float32.
+        tpv32 = TPV(xc32, yc32)
+        phi, theta = @inferred intermediate_to_native(tpv32, 0.0f0, 0.0f0)
+        @test phi isa Float32
+        @test theta isa Float32
+        x32, y32 = @inferred native_to_intermediate(tpv32, 0.5f0, Float32(π/3))
+        @test x32 isa Float32
+        @test y32 isa Float32
+
+        # Full-pipeline type preservation with Float32 pixel input.
+        # Forward pass should preserve Float32 through the pipeline.
+        hdr32 = Dict{String,Any}(
+            "NAXIS" => 2,
+            "CTYPE1" => "RA---TPV", "CTYPE2" => "DEC--TPV",
+            "CRPIX1" => 256.0, "CRPIX2" => 256.0,
+            "CRVAL1" => 83.8221, "CRVAL2" => -5.3911,
+            "CDELT1" => -2.7778e-4, "CDELT2" => 2.7778e-4,
+        )
+        wcs32 = from_header(hdr32)
+        pix32 = Float32[256.0, 256.0]
+        world32 = pixel_to_world(wcs32, pix32)
+        @test eltype(world32) == Float32
+        # Float32 forward → Float64 world → Float64 pixel is consistent.
+        world_copy = Float64[world32[1], world32[2]]
+        pix_from_copy = world_to_pixel(wcs32, world_copy)
+        world2 = pixel_to_world(wcs32, pix_from_copy)
+        @test world2 ≈ world_copy  atol=1e-7
+    end
+
+    @testset "TPV full pipeline round-trip" begin
+        # Build a TPV WCS with a moderate cubic distortion and verify that
+        # pixel→world→pixel round-trips converge at multiple positions.
+        hdr = Dict{String,Any}(
+            "NAXIS" => 2,
+            "CTYPE1" => "RA---TPV", "CTYPE2" => "DEC--TPV",
+            "CRPIX1" => 256.0, "CRPIX2" => 256.0,
+            "CRVAL1" => 83.8221, "CRVAL2" => -5.3911,
+            "CDELT1" => -2.7778e-4, "CDELT2" => 2.7778e-4,
+            "PV1_1" => 1.0,     # identity x
+            "PV1_4" => 1e-7,    # small x² correction
+            "PV2_2" => 1.0,     # identity y
+            "PV2_6" => -1e-7,   # small y² correction
+        )
+        wcs = from_header(hdr)
+        @test wcs.projection isa TPV
+
+        test_pixels = [
+            [256.0, 256.0],   # reference pixel
+            [300.0, 256.0],   # off-reference in x
+            [256.0, 300.0],   # off-reference in y
+            [200.0, 200.0],   # lower-left quadrant
+            [350.0, 350.0],   # upper-right quadrant
+            [150.0, 100.0],   # corner
+        ]
+        for pix0 in test_pixels
+            world = pixel_to_world(wcs, pix0)
+            pix1 = world_to_pixel(wcs, world)
+            @test pix1 ≈ pix0  atol=1e-7
+            # World round-trip error is bounded by the _tpv_inverse convergence
+            # tolerance (1e-10 degrees).
+            pix2 = world_to_pixel(wcs, world)
+            world2 = pixel_to_world(wcs, pix2)
+            @test world2 ≈ world  atol=1e-10
+        end
     end
 end  # @testset "FITSWCS"
 

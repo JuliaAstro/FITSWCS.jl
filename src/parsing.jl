@@ -106,11 +106,13 @@ function projection_from_code(code::AbstractString)
     c == "QSC" && return QSC()
     c == "HPX" && return HPX()
     c == "XPH" && return XPH()
+    c == "TPV" && return TPV()
+    c == "TPD" && return TPV()
     return UnknownProjection(c)
 end
 
 function projection_from_header(code::AbstractString, header::AbstractDict,
-                                 lat_axis::Int, alt::Char)
+                                 lon_axis::Int, lat_axis::Int, alt::Char)
     c = uppercase(strip(code))
 
     if c == "AZP"
@@ -209,8 +211,139 @@ function projection_from_header(code::AbstractString, header::AbstractDict,
         return HPX(H, K)
     end
 
+    # TPV/TPD: TAN + sequent polynomial distortion encoded in PVi_m keywords.
+    # Coefficients are collected from PV keywords on both celestial axes.
+    if c == "TPV" || c == "TPD"
+        alt_str = alt == ' ' ? "" : string(alt)
+        xcoeff_raw = _collect_tpv_coeffs(header, lon_axis, alt_str)
+        ycoeff_raw = _collect_tpv_coeffs(header, lat_axis, alt_str)
+        # If both empty, return identity TPV (= plain TAN).
+        xcoeff = isempty(xcoeff_raw) ? Float64[0.0, 1.0] : xcoeff_raw
+        ycoeff = isempty(ycoeff_raw) ? Float64[0.0, 0.0, 1.0] : ycoeff_raw
+        return TPV(xcoeff, ycoeff)
+    end
+
     # Other supported projections currently have no parsed PV parameters.
     return projection_from_code(c)
+end
+
+"""
+    _collect_tpv_coeffs(header, axis, alt_str) -> Vector{Float64}
+
+Collect TPV/TPD polynomial coefficients from `PV{axis}_m` keywords for
+``m = 0..59`` (the TPD coefficient range).  Gaps are zero-filled so the
+returned vector is indexed directly by ``m`` (i.e. `result[m+1] = PVm`).
+Returns an empty vector if no PV keywords are found on this axis.
+"""
+function _collect_tpv_coeffs(header::AbstractDict, axis::Int, alt_str::AbstractString)
+    coeff = Float64[]
+    for m in 0:59
+        key = "PV$(axis)_$(m)$(alt_str)"
+        if haskey(header, key)
+            while length(coeff) < m
+                push!(coeff, 0.0)   # fill gap with zero
+            end
+            push!(coeff, Float64(header[key]))
+        end
+    end
+    return coeff
+end
+
+# ── SCAMP TPV compatibility ────────────────────────────────────────────────────
+
+"""
+    _remove_sip_keywords!(header, alt_str)
+
+Delete all SIP-distortion keywords (`A_ORDER`, `B_ORDER`, `A_i_j`, `B_i_j`,
+`AP_*`, `BP_*`) for the given alternate WCS suffix from `header`.
+"""
+function _remove_sip_keywords!(header::AbstractDict, alt_str::AbstractString)
+    sip_prefixes = ("A_", "B_", "AP_", "BP_")
+    to_remove = String[]
+    for (key, _) in header
+        key isa AbstractString || continue
+        u = uppercase(key)
+        for pfx in sip_prefixes
+            startswith(u, pfx) || continue
+            (occursin(r"^(A|B|AP|BP)_(ORDER|[0-9]+_[0-9]+)$" * alt_str, u) ||
+             occursin(r"^(A|B|AP|BP)_ORDER$" * alt_str, u)) &&
+                push!(to_remove, key)
+        end
+    end
+    for k in to_remove
+        delete!(header, k)
+    end
+end
+
+"""
+    _detect_pre2012_scamp_tpv(header, alt_str) -> Bool
+
+Detect pre-2012 SCAMP headers: CTYPE ends in `-TAN` on celestial axes AND
+PVi_j keywords with j ≥ 5 are present on those axes.
+"""
+function _detect_pre2012_scamp_tpv(header::AbstractDict, alt_str::AbstractString)
+    tan_axes = Int[]
+    pv_axes_high = Int[]
+
+    for (key, value) in header
+        key isa AbstractString || continue
+        ukey = uppercase(key)
+
+        # Detect CTYPE with -TAN suffix
+        m = match(Regex("^CTYPE([1-9][0-9]*)$(alt_str)\$"), ukey)
+        if m !== nothing
+            sys, ct, pc = parse_ctype(String(value))
+            if pc == "TAN"
+                push!(tan_axes, parse(Int, m.captures[1]))
+            end
+            continue
+        end
+
+        # Detect PVi_j with j ≥ 5
+        m = match(Regex("^PV([1-9][0-9]*)_([0-9]+)$(alt_str)\$"), ukey)
+        if m !== nothing
+            param = parse(Int, m.captures[2])
+            if param >= 5
+                push!(pv_axes_high, parse(Int, m.captures[1]))
+            end
+        end
+    end
+
+    !isempty(tan_axes) && !isempty(pv_axes_high) && return true
+    return false
+end
+
+"""
+    _fix_scamp_compatibility!(header, alt_str)
+
+Apply SCAMP WCS compatibility fixes to `header` before parsing.
+
+Pre-2012 SCAMP wrote TPV coefficients in `PVi_m` keywords but used
+`CTYPE=-TAN`.  When detected, the CTYPE is mutated from `-TAN` to
+`-TPV` and any SIP keywords are stripped so that TPV is parsed as
+the active distortion model.
+"""
+function _fix_scamp_compatibility!(header::AbstractDict, alt_str::AbstractString)
+    if !_detect_pre2012_scamp_tpv(header, alt_str)
+        return
+    end
+
+    # Mutate CTYPE from -TAN to -TPV on celestial axes.
+    for (key, value) in header
+        key isa AbstractString || continue
+        ukey = uppercase(key)
+        m = match(Regex("^CTYPE([1-9][0-9]*)$(alt_str)\$"), ukey)
+        m === nothing && continue
+        sys, ct, pc = parse_ctype(String(value))
+        if pc == "TAN"
+            # Preserve the original 4-char prefix including hyphens (e.g. "RA--").
+            prefix = String(value)[1:4]
+            header[key] = "$(prefix)-TPV"
+        end
+    end
+
+    # Remove SIP keywords (TPV takes precedence).
+    _remove_sip_keywords!(header, alt_str)
 end
 
 function reject_tabular_axes(ctype::Vector{String})
@@ -459,6 +592,10 @@ function from_header(header::AbstractDict; alt::Char=' ')
     naxis >= 1 || throw(ArgumentError("NAXIS/WCSAXES must be ≥ 1, got $naxis"))
     validate_wcs_keyword_dimensions(header, naxis, alt)
 
+    # ── SCAMP compatibility: pre-2012 -TAN + PV≥5 → -TPV ─────────────────────
+    # Must run before CTYPE parsing so the mutated header values are read.
+    _fix_scamp_compatibility!(header, alt_str)
+
     # ── Core per-axis keywords ────────────────────────────────────────────────
     crpix = Vector{Float64}(undef, naxis)
     crval = Vector{Float64}(undef, naxis)
@@ -517,12 +654,16 @@ function from_header(header::AbstractDict; alt::Char=' ')
     end
 
     projection = isempty(proj_code) ? nothing :
-        projection_from_header(proj_code, header, lat_axis, alt)
+        projection_from_header(proj_code, header, lon_axis, lat_axis, alt)
 
     # ── Reject unsupported lookup distortions before parsing supported SIP ────
     reject_lookup_distortion_keywords(header, alt_str)
 
     # ── Parse optional SIP distortion before building transform output ────────
+    # TPV/TPD takes precedence over SIP (SCAMP convention).
+    if proj_code in ("TPV", "TPD")
+        _remove_sip_keywords!(header, alt_str)
+    end
     sip = parse_sip_distortion(header, crpix, naxis, alt)
 
     # ── Build the CD matrix ───────────────────────────────────────────────────

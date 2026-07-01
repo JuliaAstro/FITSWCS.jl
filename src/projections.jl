@@ -12,6 +12,155 @@ in **degrees**.  This matches the FITS WCS Paper II convention.
 """
 
 # ──────────────────────────────────────────────────────────────────────────────
+# TPD coefficient-to-term mapping (used by TPV, TPD, and SCAMP)
+# ──────────────────────────────────────────────────────────────────────────────
+
+"""
+    _TPD_TERMS
+
+Module-level tuple mapping TPD coefficient index `m` (0-based) to the monomial
+term it represents.  Each entry is either `(:mono, dx, dy)` for ``x^{dx} y^{dy}``
+or `(:radial, power)` for ``r^{power}`` where ``r = \\sqrt{x^2 + y^2}``.
+
+Generated following the SCAMP TPD convention:
+
+|  m | term      |  m | term        |  m | term          |
+|----|-----------|----|-------------|----|---------------|
+|  0 | 1         |  3 | r           |  7 | x³            |
+|  1 | x         |  4 | x²          |  8 | x²y           |
+|  2 | y         |  5 | xy          |  9 | xy²           |
+|    |           |  6 | y²          | 10 | y³            |
+|    |           |    |             | 11 | r³            |
+
+Degree ``d`` contributes ``d+1`` monomial terms; odd degrees also contribute a
+radial ``r^d`` term.  The table is sized for 60 entries (TPD limit; TPV uses
+only the first 40).
+"""
+const _TPD_TERMS = let
+    terms = Tuple{Symbol,Vararg{Int}}[]
+    max_terms = 60
+    d = 0
+    while length(terms) < max_terms
+        if d == 0
+            push!(terms, (:mono, 0, 0))
+        else
+            for i in 0:d
+                push!(terms, (:mono, d - i, i))
+                length(terms) >= max_terms && break
+            end
+            if isodd(d) && length(terms) < max_terms
+                push!(terms, (:radial, d))
+            end
+        end
+        d += 1
+    end
+    Tuple(terms)
+end
+
+"""
+    _tpd_term_value(idx, u, v)
+
+Evaluate a single TPD term at position `(u, v)`.
+
+`idx` is the 0-based TPD coefficient index `m` (see `_TPD_TERMS`).
+Returns ``x^{dx} y^{dy}`` for monomial terms or ``r^{power}`` for radial terms.
+"""
+@inline function _tpd_term_value(idx::Int, u::Real, v::Real)
+    term = _TPD_TERMS[idx + 1]  # m is 0-based, Julia arrays are 1-based
+    if term[1] === :mono
+        return _smallpow(u, term[2]) * _smallpow(v, term[3])
+    else  # :radial
+        r = hypot(u, v)
+        return _smallpow(r, term[2])
+    end
+end
+
+"""
+    _evaluate_tpv_polynomial(coeff, u, v)
+
+Evaluate a TPV/TPD polynomial at position `(u, v)`.
+
+Returns ``\\sum_{m} coeff[m+1] \\cdot term_m(u, v)`` where ``term_m`` is the
+TPD basis function at index ``m``.  Skips zero coefficients.
+"""
+function _evaluate_tpv_polynomial(coeff::AbstractVector, u::Real, v::Real)
+    T = _promote_float_type(u, v)
+    result = zero(T)
+    @inbounds for i in eachindex(coeff)
+        c = coeff[i]
+        iszero(c) && continue
+        result += T(c) * _tpd_term_value(i - 1, T(u), T(v))
+    end
+    return result
+end
+
+"""
+    _tpv_inverse(xcoeff, ycoeff, x_target, y_target) -> (u, v)
+
+Invert the TPV forward polynomial via fixed-point iteration.
+
+Given corrected coordinates `(x_target, y_target)` (the output of the TPV
+polynomial), recover the original intermediate coordinates `(u, v)`.  Uses
+the identity iteration ``u_{k+1} = u_k - (f_x(u_k, v_k) - x_{target})``
+which converges when the polynomial is a small perturbation of identity
+(the typical case for SCAMP-distorted images).
+
+If the iteration diverges (residual increases for 3 consecutive steps) or
+fails to converge within `max_iter` iterations, a warning is issued and the
+best estimate so far is returned.  This matches Astropy's `quiet=True`
+behaviour — a slightly-inaccurate intermediate coordinate is more useful
+than crashing the entire `world_to_pixel` call.
+
+# TODO: add a keyword argument (e.g. `error::Bool = false`) that raises
+# a `NoConvergence`-style exception carrying the best solution, matching
+# Astropy's `quiet=False` mode.
+"""
+function _tpv_inverse(xcoeff::AbstractVector, ycoeff::AbstractVector,
+                       x_target::Real, y_target::Real;
+                       max_iter::Int = 64)
+    T = _promote_float_type(x_target, y_target)
+    u = T(x_target)
+    v = T(y_target)
+    tol_T = _convergence_tol(T)
+    xt = T(x_target)
+    yt = T(y_target)
+
+    local prev_r::T = typemax(T)
+    local div_count::Int = 0
+
+    @inbounds for k in 1:max_iter
+        x_corr = _evaluate_tpv_polynomial(xcoeff, u, v)
+        y_corr = _evaluate_tpv_polynomial(ycoeff, u, v)
+        du = x_corr - xt
+        dv = y_corr - yt
+        u -= du
+        v -= dv
+        r = hypot(du, dv)
+        r <= tol_T && return u, v
+
+        # Track divergence: residual increasing for 3 consecutive iterations.
+        if r >= prev_r
+            div_count += 1
+            if div_count >= 3
+                @warn "TPV inverse is diverging at iteration $k " *
+                      "(residual $prev_r → $r > tolerance $tol_T); " *
+                      "returning best estimate so far"
+                return u, v
+            end
+        else
+            div_count = 0
+        end
+        prev_r = r
+    end
+
+    # Hit max_iter without converging but residual was decreasing (slow conv).
+    @warn "TPV inverse failed to converge after $max_iter iterations " *
+          "(final residual $prev_r > tolerance $tol_T); " *
+          "returning best estimate"
+    return u, v
+end
+
+# ──────────────────────────────────────────────────────────────────────────────
 # Shared zenithal utilities
 # ──────────────────────────────────────────────────────────────────────────────
 
@@ -256,6 +405,33 @@ function native_to_intermediate(::TAN, phi::Real, theta::Real)
     end
     Rth = rad2deg(cos(theta) / sth)     # degrees
     return _zenithal_native_to_xy(Rth, phi)
+end
+
+# ──────────────────────────────────────────────────────────────────────────────
+# TPV – TAN + sequent polynomial distortion   (SCAMP convention)
+# ──────────────────────────────────────────────────────────────────────────────
+
+"""
+    intermediate_to_native(::TPV, x, y) -> (phi, theta)
+
+Inverse TPV projection: apply the TPV polynomial correction to `(x, y)`, then
+delegate to the TAN (gnomonic) inverse.
+"""
+function intermediate_to_native(proj::TPV, x::Real, y::Real)
+    x_corr = _evaluate_tpv_polynomial(proj.xcoeff, x, y)
+    y_corr = _evaluate_tpv_polynomial(proj.ycoeff, x, y)
+    return intermediate_to_native(TAN(), x_corr, y_corr)
+end
+
+"""
+    native_to_intermediate(::TPV, phi, theta) -> (x, y)
+
+Forward TPV projection: compute the TAN forward transform, then invert the TPV
+polynomial to recover the original intermediate coordinates.
+"""
+function native_to_intermediate(proj::TPV, phi::Real, theta::Real)
+    x_corr, y_corr = native_to_intermediate(TAN(), phi, theta)
+    return _tpv_inverse(proj.xcoeff, proj.ycoeff, x_corr, y_corr)
 end
 
 # ──────────────────────────────────────────────────────────────────────────────

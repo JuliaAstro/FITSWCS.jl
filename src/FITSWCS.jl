@@ -59,7 +59,7 @@ export
     WCSTransform,
     SIPDistortion,
     AbstractProjection,
-    AZP, SZP, TAN, SIN, STG, ARC, ZEA, CAR, CEA, CYP, MER, SFL, PAR, MOL, PCO, AIT, UnknownProjection,
+    AZP, SZP, TAN, TPV, SIN, STG, ARC, ZEA, CAR, CEA, CYP, MER, SFL, PAR, MOL, PCO, AIT, UnknownProjection,
 
     # Parsing
     WCS,
