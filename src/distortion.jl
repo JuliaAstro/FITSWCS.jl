@@ -118,35 +118,36 @@ end
 
 function sip_pixel_to_focal(sip::SIPDistortion, pixel::AbstractVector)
     length(pixel) >= 2 || throw(DimensionMismatch("SIP distortion requires at least two pixel axes"))
-    focal = collect(Float64, pixel)
 
     # Evaluate forward offsets relative to the SIP reference pixel.
-    u = focal[1] - sip.crpix[1]
-    v = focal[2] - sip.crpix[2]
-    focal[1] += evaluate_sip_polynomial(sip.a, u, v)
-    focal[2] += evaluate_sip_polynomial(sip.b, u, v)
+    # FITS SIP convention: f_i = p_i + Σ A_ij (p_1−CRPIX1)^i (p_2−CRPIX2)^j
+    u = pixel[1] - sip.crpix[1]
+    v = pixel[2] - sip.crpix[2]
+    fx = pixel[1] + evaluate_sip_polynomial(sip.a, u, v)
+    fy = pixel[2] + evaluate_sip_polynomial(sip.b, u, v)
 
-    return focal
+    return SVector{2,_coordinate_float_type(pixel)}(fx, fy)
 end
 
 function sip_focal_to_pixel(sip::SIPDistortion, focal::AbstractVector)
     length(focal) >= 2 || throw(DimensionMismatch("SIP distortion requires at least two pixel axes"))
+    T = _coordinate_float_type(focal)
 
     # Prefer explicit inverse SIP coefficients when the header provides them.
+    # FITS SIP convention: p_i = f_i + Σ AP_ij (f_1−CRPIX1)^i (f_2−CRPIX2)^j
     if sip.ap !== nothing && sip.bp !== nothing
-        pixel = collect(Float64, focal)
-        u = pixel[1] - sip.crpix[1]
-        v = pixel[2] - sip.crpix[2]
-        pixel[1] += evaluate_sip_polynomial(sip.ap, u, v)
-        pixel[2] += evaluate_sip_polynomial(sip.bp, u, v)
-        return pixel
+        u = focal[1] - sip.crpix[1]
+        v = focal[2] - sip.crpix[2]
+        px = focal[1] + evaluate_sip_polynomial(sip.ap, u, v)
+        py = focal[2] + evaluate_sip_polynomial(sip.bp, u, v)
+        return SVector{2,T}(px, py)
     end
 
     # Otherwise solve forward(pixel) = focal with a fixed-point correction.
     # TODO: add a keyword argument (e.g. `error::Bool = false`) that raises
     # a `NoConvergence`-style exception carrying the best solution.
-    pixel = collect(Float64, focal)
-    target = collect(Float64, focal)
+    pixel = SVector{2,T}(T(focal[1]), T(focal[2]))  # initial guess
+    target = SVector{2,T}(T(focal[1]), T(focal[2]))
     max_iter = 64
     tol = 1e-10
     prev_r = Inf
@@ -156,8 +157,7 @@ function sip_focal_to_pixel(sip::SIPDistortion, focal::AbstractVector)
         corrected = sip_pixel_to_focal(sip, pixel)
         dx = corrected[1] - target[1]
         dy = corrected[2] - target[2]
-        pixel[1] -= dx
-        pixel[2] -= dy
+        pixel = SVector{2,T}(pixel[1] - dx, pixel[2] - dy)
         r = hypot(dx, dy)
         r <= tol && return pixel
 
@@ -178,5 +178,5 @@ function sip_focal_to_pixel(sip::SIPDistortion, focal::AbstractVector)
     @warn "SIP inverse failed to converge after $max_iter iterations " *
           "(final residual $prev_r > tolerance $tol); " *
           "returning best estimate"
-    return pixel
+    return SVector{2,T}(pixel)
 end

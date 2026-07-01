@@ -24,28 +24,24 @@ Apply the linear pixel-to-intermediate transform.
 Returns a length-`naxis` vector of intermediate world coordinates in degrees
 (for celestial axes) or in whatever units are implied by the CD matrix.
 """
-function pixel_to_intermediate(wcs::WCSTransform{N}, pixel::StaticVector{N}) where {N}
-    # Apply pre-linear SIP distortion when present.
-    focal = wcs.sip === nothing ? pixel : sip_pixel_to_focal(wcs.sip, pixel)
-
-    # Build a static offset vector before applying the static CD matrix.
-    T = _coordinate_float_type(pixel)
-    delta = SVector{N,T}(ntuple(i -> T(focal[i]) - T(wcs.crpix[i]), N))
-    return wcs.cd * delta
-end
-
 function pixel_to_intermediate(wcs::WCSTransform{N}, pixel::AbstractVector) where {N}
     length(pixel) == N ||
         throw(DimensionMismatch("pixel has length $(length(pixel)), expected $N"))
 
-    # Apply pre-linear SIP distortion when present.
-    focal = wcs.sip === nothing ? pixel : sip_pixel_to_focal(wcs.sip, pixel)
-
-    # Use a static temporary for the matrix product, then return ordinary storage.
     T = _coordinate_float_type(pixel)
-    delta = SVector{N,T}(ntuple(i -> T(focal[i]) - T(wcs.crpix[i]), N))
-    return Vector{T}(wcs.cd * delta)
+    delta = if wcs.sip === nothing
+        SVector{N,T}(ntuple(i -> T(pixel[i]) - T(wcs.crpix[i]), N))
+    else
+        # SIP corrects only axes 1–2; axes 3+ pass through unchanged.
+        fx, fy = sip_pixel_to_focal(wcs.sip, pixel)
+        SVector{N,T}(ntuple(i ->
+            i == 1 ? T(fx) - T(wcs.crpix[1]) :
+            i == 2 ? T(fy) - T(wcs.crpix[2]) :
+            T(pixel[i]) - T(wcs.crpix[i]), N))
+    end
+    return wcs.cd * delta
 end
+
 
 """
     intermediate_to_pixel(wcs, intermediate) -> pixel
@@ -56,12 +52,20 @@ Requires the CD matrix to be invertible.  Throws a `LinearAlgebra.SingularExcept
 if the matrix is singular.
 """
 function intermediate_to_pixel(wcs::WCSTransform{N}, intermediate::StaticVector{N}) where {N}
+    T = _coordinate_float_type(intermediate)
     # Undo the linear matrix to recover focal/image-plane pixel coordinates.
     focal = wcs.crpix .+ (wcs.cd \ intermediate)
 
-    # Convert focal/image-plane coordinates back to detector pixels if needed.
-    pixel = wcs.sip === nothing ? focal : sip_focal_to_pixel(wcs.sip, focal)
-    return SVector{N,_coordinate_float_type(intermediate)}(pixel)
+    if wcs.sip === nothing
+        return SVector{N,T}(focal)
+    else
+        # SIP corrects only axes 1–2; axes 3+ pass through unchanged.
+        px, py = sip_focal_to_pixel(wcs.sip, focal)
+        return SVector{N,T}(ntuple(i ->
+            i == 1 ? T(px) :
+            i == 2 ? T(py) :
+            T(focal[i]), N))
+    end
 end
 
 function intermediate_to_pixel(wcs::WCSTransform{N}, intermediate::AbstractVector) where {N}
@@ -71,9 +75,5 @@ function intermediate_to_pixel(wcs::WCSTransform{N}, intermediate::AbstractVecto
     # Use a static temporary for the matrix solve, then return ordinary storage.
     T = _coordinate_float_type(intermediate)
     x = SVector{N,T}(ntuple(i -> T(intermediate[i]), N))
-    focal = wcs.crpix .+ (wcs.cd \ x)
-
-    # Convert focal/image-plane coordinates back to detector pixels if needed.
-    pixel = wcs.sip === nothing ? focal : sip_focal_to_pixel(wcs.sip, focal)
-    return Vector{T}(pixel)
+    return intermediate_to_pixel(wcs, x)
 end
