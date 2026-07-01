@@ -113,25 +113,19 @@ function projection_from_header(code::AbstractString, header::AbstractDict,
                                  lat_axis::Int, alt::Char)
     c = uppercase(strip(code))
 
-    # AZP defaults to the TAN-equivalent perspective case when PV terms are absent.
     if c == "AZP"
         alt_str = alt == ' ' ? "" : string(alt)
         mu = Float64(get(header, "PV$(lat_axis)_1$(alt_str)", 0.0))
         gamma = Float64(get(header, "PV$(lat_axis)_2$(alt_str)", 0.0))
-        mu == 0.0 && gamma == 0.0 ||
-            throw(ArgumentError("AZP non-default PV parameters are not implemented yet"))
-        return AZP()
+        return AZP(mu, gamma)
     end
 
-    # SZP defaults to the same central perspective as TAN/AZP.
     if c == "SZP"
         alt_str = alt == ' ' ? "" : string(alt)
         mu = Float64(get(header, "PV$(lat_axis)_1$(alt_str)", 0.0))
         phi_c = Float64(get(header, "PV$(lat_axis)_2$(alt_str)", 0.0))
         theta_c = Float64(get(header, "PV$(lat_axis)_3$(alt_str)", 90.0))
-        mu == 0.0 && phi_c == 0.0 && theta_c == 90.0 ||
-            throw(ArgumentError("SZP non-default PV parameters are not implemented yet"))
-        return SZP()
+        return SZP(mu, phi_c, theta_c)
     end
 
     # SIN uses slant orthographic parameters on the latitude-like axis.
