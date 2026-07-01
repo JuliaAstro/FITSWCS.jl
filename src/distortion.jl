@@ -5,8 +5,6 @@ The Simple Imaging Polynomial convention represents image-plane distortion as
 polynomial offsets in pixel coordinates relative to `CRPIX1` and `CRPIX2`.
 """
 
-const _SIP_INVERSE_MAXITER = 30
-const _SIP_INVERSE_TOL = 1e-10
 
 function has_sip_keywords(header::AbstractDict, alt_str::AbstractString)
     # Detect any SIP order keyword for this WCS version.
@@ -104,14 +102,15 @@ function parse_sip_distortion(header::AbstractDict, crpix::Vector{Float64},
 end
 
 function evaluate_sip_polynomial(coeff::AbstractMatrix, u::Real, v::Real)
+    T = _promote_float_type(u, v)
     order = size(coeff, 1) - 1
-    value = 0.0
+    value = zero(T)
 
     # Sum terms whose total degree is within the SIP polynomial order.
     for i in 0:order, j in 0:(order - i)
         c = coeff[i + 1, j + 1]
-        c == 0.0 && continue
-        value += c * u^i * v^j
+        iszero(c) && continue
+        value += T(c) * _smallpow(u, i) * _smallpow(v, j)
     end
 
     return value
@@ -144,18 +143,40 @@ function sip_focal_to_pixel(sip::SIPDistortion, focal::AbstractVector)
     end
 
     # Otherwise solve forward(pixel) = focal with a fixed-point correction.
+    # TODO: add a keyword argument (e.g. `error::Bool = false`) that raises
+    # a `NoConvergence`-style exception carrying the best solution.
     pixel = collect(Float64, focal)
     target = collect(Float64, focal)
-    for _ in 1:_SIP_INVERSE_MAXITER
+    max_iter = 64
+    tol = 1e-10
+    prev_r = Inf
+    div_count = 0
+
+    for k in 1:max_iter
         corrected = sip_pixel_to_focal(sip, pixel)
         dx = corrected[1] - target[1]
         dy = corrected[2] - target[2]
         pixel[1] -= dx
         pixel[2] -= dy
-        if hypot(dx, dy) <= _SIP_INVERSE_TOL
-            return pixel
+        r = hypot(dx, dy)
+        r <= tol && return pixel
+
+        if r >= prev_r
+            div_count += 1
+            if div_count >= 3
+                @warn "SIP inverse is diverging at iteration $k " *
+                      "(residual $prev_r → $r > tolerance $tol); " *
+                      "returning best estimate so far"
+                return pixel
+            end
+        else
+            div_count = 0
         end
+        prev_r = r
     end
 
-    error("SIP inverse iteration failed to converge after $_SIP_INVERSE_MAXITER iterations")
+    @warn "SIP inverse failed to converge after $max_iter iterations " *
+          "(final residual $prev_r > tolerance $tol); " *
+          "returning best estimate"
+    return pixel
 end
