@@ -35,41 +35,17 @@ header specifies via `CDELT` and `CRVAL`.
 
 @inline _coordinate_float_type(coords::Tuple{Vararg{Real}}) = _promote_float_type(coords...)
 
-function _coordinate_vector(coords::Tuple{Vararg{Real,N}}) where {N}
+function _coordinate_vector(coords::Tuple{Vararg{Real, N}}) where {N}
     # Preserve tuple precision and length when materializing scalar arguments.
     T = _coordinate_float_type(coords)
     return SVector{N,T}(coords)
 end
 
-function _world_from_intermediate(wcs::WCSTransform, intermediate::AbstractVector, ::Type{T}) where {T<:AbstractFloat}
-    world = Vector{T}(undef, wcs.naxis)
-
-    # Add CRVAL axis-by-axis so WCS metadata is converted to the coordinate type.
-    for i in 1:wcs.naxis
-        world[i] = T(wcs.crval[i]) + T(intermediate[i])
-    end
-
-    return world
+@inline function _world_from_intermediate(wcs::WCSTransform{N}, intermediate::AbstractVector, ::Type{T}) where {N, T <: AbstractFloat}
+    return SVector{N,T}(ntuple(i -> T(wcs.crval[i]) + T(intermediate[i]), N))
 end
 
-function _world_from_intermediate(wcs::WCSTransform{N}, intermediate::StaticVector{N}, ::Type{T}) where {N,T<:AbstractFloat}
-    # Keep static intermediate coordinates static in the public result.
-    return convert(SVector{N,T}, wcs.crval) .+ convert(SVector{N,T}, intermediate)
-end
-
-function _world_offsets(wcs::WCSTransform, world::AbstractVector, ::Type{T}) where {T<:AbstractFloat}
-    intermediate = Vector{T}(undef, wcs.naxis)
-
-    # Subtract CRVAL axis-by-axis to avoid broadcast promotion through WCS storage.
-    for i in 1:wcs.naxis
-        intermediate[i] = T(world[i]) - T(wcs.crval[i])
-    end
-
-    return intermediate
-end
-
-function _world_offsets(wcs::WCSTransform{N}, world::StaticVector{N}, ::Type{T}) where {N,T<:AbstractFloat}
-    # Keep static world coordinates static before applying the inverse linear map.
+@inline function _world_offsets(wcs::WCSTransform{N}, world::AbstractVector, ::Type{T}) where {N,T<:AbstractFloat}
     return SVector{N,T}(ntuple(i -> T(world[i]) - T(wcs.crval[i]), N))
 end
 
