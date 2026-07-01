@@ -97,17 +97,15 @@ function pixel_to_world(wcs::WCSTransform, pixel::AbstractVector)
 
         # Spherical rotation: (φ, θ) → (α, δ) in radians
         # alpha_p, delta_p are the celestial coords of the native north pole.
-        d2r = deg2rad(one(T))
-        r2d = inv(d2r)
-        alpha_p = T(wcs.alpha_p) * d2r
-        delta_p = T(wcs.delta_p) * d2r
-        phi_p = T(wcs.lonpole) * d2r
+        alpha_p = deg2rad(T(wcs.alpha_p))
+        delta_p = deg2rad(T(wcs.delta_p))
+        phi_p = deg2rad(T(wcs.lonpole))
 
         alpha, delta = native_to_celestial(phi, theta, alpha_p, delta_p, phi_p)
         # Build world vector: start from the intermediate coords, then overwrite
         # the celestial axes with the spherical-rotation results.
         world = _world_from_intermediate(wcs, x, T)
-        return _set_celestial_axes!(world, lon_idx, lat_idx, mod(alpha * r2d, T(360)), delta * r2d)
+        return _set_celestial_axes!(world, lon_idx, lat_idx, mod(rad2deg(alpha), 360), rad2deg(delta))
     else
         # Purely linear: world = CRVAL + CD*(pixel - CRPIX)
         return _world_from_intermediate(wcs, x, T)
@@ -140,20 +138,19 @@ function world_to_pixel(wcs::WCSTransform, world::AbstractVector)
 
         # The fiducial celestial point is defined to have zero intermediate
         # coordinates; handling it directly avoids pole cancellation.
-        lon_delta = mod(T(world[lon_idx]) - T(wcs.crval[lon_idx]) + T(180), T(360)) - T(180)
-        if abs(lon_delta) <= T(1e-10) && abs(T(world[lat_idx]) - T(wcs.crval[lat_idx])) <= T(1e-10)
+        lon_delta = mod(world[lon_idx] - T(wcs.crval[lon_idx]) + 180, 360) - 180
+        if abs(lon_delta) <= T(1e-10) && abs(world[lat_idx] - T(wcs.crval[lat_idx])) <= T(1e-10)
             x = _world_offsets(wcs, world, T)
             x = _set_celestial_axes!(x, lon_idx, lat_idx, zero(T), zero(T))
             return intermediate_to_pixel(wcs, x)
         end
 
-        d2r = deg2rad(one(T))
-        alpha_p = T(wcs.alpha_p) * d2r
-        delta_p = T(wcs.delta_p) * d2r
-        phi_p = T(wcs.lonpole) * d2r
+        alpha_p = deg2rad(T(wcs.alpha_p))
+        delta_p = deg2rad(T(wcs.delta_p))
+        phi_p = deg2rad(T(wcs.lonpole))
 
-        alpha = T(world[lon_idx]) * d2r
-        delta = T(world[lat_idx]) * d2r
+        alpha = deg2rad(T(world[lon_idx]))
+        delta = deg2rad(T(world[lat_idx]))
 
         # Spherical rotation: (α, δ) → (φ, θ)
         phi, theta = celestial_to_native(alpha, delta, alpha_p, delta_p, phi_p)
