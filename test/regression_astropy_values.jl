@@ -152,7 +152,7 @@ end
         for (pix, world_ref) in refs[code]
             world = pixel_to_world(wcs, pix)
             @test world ≈ world_ref atol=1e-10
-            @test world_to_pixel(wcs, world_ref) ≈ pix atol=1e-7
+            @test world_to_pixel(wcs, world_ref) ≈ pix atol=1e-8
         end
     end
 end
@@ -201,7 +201,7 @@ end
     ]
         world = pixel_to_world(wcs, pix)
         @test world ≈ world_ref atol=1e-10
-        @test world_to_pixel(wcs, world_ref) ≈ pix atol=1e-6
+        @test world_to_pixel(wcs, world_ref) ≈ pix atol=1e-8
     end
 end
 
@@ -224,8 +224,8 @@ end
         ([20.0, 50.0, 35.0], [10.110247929297399, 1.43e9, 24.899959594018089]),
     ]
         world = pixel_to_world(wcs, pix)
-        @test world ≈ world_ref atol=1e-7
-        @test world_to_pixel(wcs, world_ref) ≈ pix atol=1e-6
+        @test world ≈ world_ref atol=1e-10
+        @test world_to_pixel(wcs, world_ref) ≈ pix atol=1e-8
     end
 end
 
@@ -252,7 +252,7 @@ end
         ([ 7.5, 22.5, -1.0, 3.0], [30.002509540012301, -4.997499995232223, 58999.0, 3.0]),
     ]
         world = pixel_to_world(wcs, pix)
-        @test world ≈ world_ref atol=1e-7
+        @test world ≈ world_ref atol=1e-10
         @test world_to_pixel(wcs, world_ref) ≈ pix atol=1e-6
     end
 end
@@ -477,6 +477,9 @@ end
         for (pix, world_ref) in refs
             world = pixel_to_world(wcs, pix)
             @test world ≈ world_ref atol=tol
+            # CSC pixel roundtrip limited by WCSLIB float32 coefficients (≈0.01 px).
+            pix_tol = code == "CSC" ? 0.01 : tol
+            @test world_to_pixel(wcs, world_ref) ≈ pix atol=pix_tol
         end
     end
 end
@@ -507,7 +510,8 @@ end
         ([100.0,  40.0], [86.5384615385, -48.5583054466]),
     ]
         world = pixel_to_world(wcs, pix)
-        @test world ≈ world_ref atol=2e-7
+        @test world ≈ world_ref atol=1e-10
+        @test world_to_pixel(wcs, world_ref) ≈ pix atol=1e-8
     end
 end
 
@@ -532,6 +536,7 @@ end
     ]
         world = pixel_to_world(wcs, pix)
         @test world ≈ world_ref atol=1e-10
+        @test world_to_pixel(wcs, world_ref) ≈ pix atol=1e-8
     end
 end
 
@@ -555,6 +560,7 @@ end
     ]
         world = pixel_to_world(wcs, pix)
         @test world ≈ world_ref atol=1e-10
+        @test world_to_pixel(wcs, world_ref) ≈ pix atol=1e-8
     end
 end
 
@@ -577,7 +583,7 @@ end
     ]
         world = pixel_to_world(wcs, pix)
         @test world ≈ world_ref atol=1e-10
-        @test world_to_pixel(wcs, world_ref) ≈ pix atol=1e-7
+        @test world_to_pixel(wcs, world_ref) ≈ pix atol=1e-8
     end
 end
 
