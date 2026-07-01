@@ -602,6 +602,33 @@ end
         sip_hdr["B_ORDER"] = 2
         @test from_header(sip_hdr).sip isa SIPDistortion
     end
+
+    @testset "SIP with 3D cube (RA/DEC/FREQ)" begin
+        # SIP only corrects pixel axes 1–2; the spectral axis (3) must pass
+        # through unchanged in both forward and inverse directions.
+        hdr = Dict{String,Any}(
+            "NAXIS"  => 3,
+            "CTYPE1" => "RA---TAN-SIP", "CTYPE2" => "DEC--TAN-SIP", "CTYPE3" => "FREQ",
+            "CRPIX1" => 256.0, "CRPIX2" => 256.0, "CRPIX3" => 1.0,
+            "CRVAL1" => 83.8221, "CRVAL2" => -5.3911, "CRVAL3" => 1.42e9,
+            "CDELT1" => -2.7778e-4, "CDELT2" => 2.7778e-4, "CDELT3" => 1.0e6,
+            "A_ORDER" => 2, "B_ORDER" => 2,
+            "A_0_1" => 1e-5, "B_1_0" => -2e-5,
+        )
+        wcs = from_header(hdr)
+        @test wcs.naxis == 3
+        @test wcs.sip isa SIPDistortion
+
+        # Forward: spectral axis passes through unchanged.
+        pix = [300.0, 280.0, 5.0]  # off-reference in all axes
+        world = pixel_to_world(wcs, pix)
+        @test world[3] ≈ 1.42e9 + 1.0e6 * (5.0 - 1.0)  # linear spectral
+
+        # Round-trip: spectral axis must be preserved.
+        pix2 = world_to_pixel(wcs, world)
+        @test pix2 ≈ pix  atol=1e-5
+        @test pix2[3] ≈ pix[3]  # spectral axis unchanged by SIP
+    end
 end
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -627,6 +654,35 @@ end
             @test world[2] ≈ 1.42e9 + 1.0e6 * (pix[2] - 40.0)
             @test world_to_pixel(wcs, world) ≈ pix atol=1e-8
         end
+
+        # Same split axis ordering with SIP distortion on pixel axes 1–2.
+        # SIP always corrects the first two pixel axes; the CD matrix then
+        # maps those corrections to world axes 1 (lon) and 3 (lat).
+        hdr_sip = Dict{String,Any}(
+            "NAXIS"  => 3,
+            "CTYPE1" => "RA---TAN-SIP", "CTYPE2" => "FREQ", "CTYPE3" => "DEC--TAN-SIP",
+            "CRPIX1" => 30.0,           "CRPIX2" => 40.0,    "CRPIX3" => 45.0,
+            "CRVAL1" => 10.0,           "CRVAL2" => 1.42e9,  "CRVAL3" => 25.0,
+            "CDELT1" => -0.01,          "CDELT2" => 1.0e6,   "CDELT3" => 0.01,
+            "A_ORDER" => 2, "B_ORDER" => 2,
+            "A_0_1" => 1e-5, "B_1_0" => -2e-5,
+        )
+        wcs_sip = from_header(hdr_sip)
+
+        @test wcs_sip.lon_axis == 1
+        @test wcs_sip.lat_axis == 3
+        @test wcs_sip.sip isa SIPDistortion
+
+        # Spectral axis must pass through SIP unchanged (SIP only touches axes 1–2).
+        pix = [30.0, 43.0, 45.0]
+        world = pixel_to_world(wcs_sip, pix)
+        @test world[2] ≈ 1.42e9 + 1.0e6 * (pix[2] - 40.0)
+
+        # Full round-trip: split axes + SIP must recover the original pixel.
+        # Tolerance is dominated by the SIP iterative inverse (1e-10 convergence
+        # in focal-plane space, scaled by CD⁻¹ → ~1e-8 pixels; 1e-4 is safe).
+        pix2 = world_to_pixel(wcs_sip, world)
+        @test pix2 ≈ pix  atol=1e-4
     end
 
     @testset "Batch mixed-axis transforms agree with scalar transforms" begin
@@ -1510,23 +1566,26 @@ end
     @test wcs_tan.crval isa SVector{2,Float64}
     @test wcs_tan.cd isa SMatrix{2,2,Float64,4}
 
-    # pixel_to_world return type is stable across linear, celestial, SIP, and 3D paths.
-    @test @inferred(pixel_to_world(wcs_lin, [2.0, 3.0]))  isa Vector{Float64}
-    @test @inferred(pixel_to_world(wcs_tan, [400.0, 300.0])) isa Vector{Float64}
-    @test @inferred(pixel_to_world(wcs_sip, [600.0, 500.0])) isa Vector{Float64}
-    @test @inferred(pixel_to_world(wcs_3d,  [40.0, 60.0, 5.0])) isa Vector{Float64}
+    # pixel_to_world always returns SVector regardless of input container type.
+    @test @inferred(pixel_to_world(wcs_lin, [2.0, 3.0]))  isa SVector{2,Float64}
+    @test @inferred(pixel_to_world(wcs_tan, [400.0, 300.0])) isa SVector{2,Float64}
+    @test @inferred(pixel_to_world(wcs_sip, [600.0, 500.0])) isa SVector{2,Float64}
+    @test @inferred(pixel_to_world(wcs_3d,  [40.0, 60.0, 5.0])) isa SVector{3,Float64}
     @test @inferred(pixel_to_world(wcs_lin, SVector(2.0, 3.0))) isa SVector{2,Float64}
     @test @inferred(pixel_to_world(wcs_lin, SVector(Float32(2), Float32(3)))) isa SVector{2,Float32}
 
-    # world_to_pixel return type is stable across the same paths.
+    # world_to_pixel always returns SVector regardless of input container type.
     w_lin = pixel_to_world(wcs_lin, [2.0, 3.0])
     w_tan = pixel_to_world(wcs_tan, [400.0, 300.0])
     w_sip = pixel_to_world(wcs_sip, [600.0, 500.0])
     w_3d  = pixel_to_world(wcs_3d,  [40.0, 60.0, 5.0])
-    @test @inferred(world_to_pixel(wcs_lin, w_lin)) isa Vector{Float64}
-    @test @inferred(world_to_pixel(wcs_tan, w_tan)) isa Vector{Float64}
-    @test @inferred(world_to_pixel(wcs_sip, w_sip)) isa Vector{Float64}
-    @test @inferred(world_to_pixel(wcs_3d,  w_3d))  isa Vector{Float64}
+    @test @inferred(world_to_pixel(wcs_lin, w_lin)) isa SVector{2,Float64}
+    @test @inferred(world_to_pixel(wcs_tan, w_tan)) isa SVector{2,Float64}
+    @test @inferred(world_to_pixel(wcs_sip, w_sip)) isa SVector{2,Float64}
+    @test @inferred(world_to_pixel(wcs_3d,  w_3d))  isa SVector{3,Float64}
+
+    # Vector input also returns SVector (input type does not dictate output type).
+    @test @inferred(world_to_pixel(wcs_lin, collect(w_lin))) isa SVector{2,Float64}
     @test @inferred(world_to_pixel(wcs_lin, SVector(2.0, 3.0))) isa SVector{2,Float64}
 
     # Batch (matrix) forms return Matrix{Float64}.
