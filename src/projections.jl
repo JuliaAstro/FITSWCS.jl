@@ -12,6 +12,32 @@ in **degrees**.  This matches the FITS WCS Paper II convention.
 """
 
 # ──────────────────────────────────────────────────────────────────────────────
+# Type-aware numerical tolerances
+# ──────────────────────────────────────────────────────────────────────────────
+
+"""
+    _boundary_tol(T)
+
+Slack for domain-boundary checks.  Returns a small multiple of machine epsilon
+so that points landing fractionally outside the valid domain due to
+floating-point roundoff are accepted.  Matches WCSLIB conventions for `Float64`
+(≈ 1e-12).
+"""
+_boundary_tol(::Type{Float64}) = 1e-12
+_boundary_tol(::Type{Float32}) = 1f-4
+_boundary_tol(T::Type) = T(min(1000 * eps(T), _boundary_tol(Float32)))
+
+"""
+    _convergence_tol(T)
+
+Tolerance for iterative convergence (Newton, bisection) and near-pole /
+near-zero guards.  Matches WCSLIB conventions for `Float64` (≈ 1e-14).
+"""
+_convergence_tol(::Type{Float64}) = 1e-14
+_convergence_tol(::Type{Float32}) = 1f-5
+_convergence_tol(T::Type) = T(min(100 * eps(T), _convergence_tol(Float32)))
+
+# ──────────────────────────────────────────────────────────────────────────────
 # Shared zenithal utilities
 # ──────────────────────────────────────────────────────────────────────────────
 
@@ -274,7 +300,7 @@ function intermediate_to_native(::ZEA, x::Real, y::Real)
     Rth = hypot(x, y) # degrees
     # R_θ = 2*(180/π)*sin((π/2 − θ)/2)  →  sin((π/2−θ)/2) = R_θ*π/(360)
     arg = deg2rad(Rth) / 2 # = R_θ * π/360
-    if abs(arg) > one(T) + T(1e-12)
+    if abs(arg) > one(T) + _boundary_tol(T)
         error("ZEA projection: point outside valid domain (|arg| = $(abs(arg)) > 1)")
     end
     arg = clamp(arg, -one(T), one(T))
@@ -339,7 +365,7 @@ function intermediate_to_native(proj::CEA, x::Real, y::Real)
 
     # Recover latitude from the equal-area ordinate and check the finite domain.
     arg = lambda * deg2rad(y)
-    abs(arg) <= one(T) + T(1e-13) ||
+    abs(arg) <= one(T) + _boundary_tol(T) || # wcslib tolerance is 1e-13
         error("CEA projection: point outside valid domain (|lambda*y*pi/180| = $(abs(arg)) > 1)")
     arg = clamp(arg, -one(T), one(T))
     theta = asin(arg)
@@ -429,12 +455,13 @@ end
 Forward MER projection.
 """
 function native_to_intermediate(::MER, phi::Real, theta::Real)
+    T = _promote_float_type(phi, theta)
     # Mercator is singular at the native poles.
-    abs(abs(theta) - π/2) > 1e-14 ||
+    abs(abs(theta) - π/2) > _convergence_tol(Float64) ||
         error("MER projection: singularity at theta = ±90°")
     phi_w = _wrap_native_phi(phi)
     x = rad2deg(phi_w)
-    y = rad2deg(log(tan(_pi(_promote_float_type(phi, theta))/4 + theta/2)))
+    y = rad2deg(log(tan(_pi(T) / 4 + theta / 2)))
     return x, y
 end
 
@@ -449,9 +476,10 @@ Inverse SFL projection.
 """
 function intermediate_to_native(::SFL, x::Real, y::Real)
     # Latitude is linear; longitude expands by sec(theta).
+    T = _promote_float_type(x, y)
     theta = deg2rad(y)
     cth = cos(theta)
-    abs(cth) > 1e-14 ||
+    abs(cth) > _convergence_tol(Float64) ||
         error("SFL projection: longitude is undefined at theta = ±90°")
     phi = deg2rad(x) / cth
     return phi, theta
@@ -474,7 +502,6 @@ end
 # PAR – Parabolic projection   (Paper II, Eq. 89)
 # ──────────────────────────────────────────────────────────────────────────────
 
-const _PAR_EDGE_TOL = 1e-13
 
 """
     intermediate_to_native(::PAR, x, y) -> (phi, theta)
@@ -486,15 +513,15 @@ function intermediate_to_native(::PAR, x::Real, y::Real)
 
     # Recover latitude from the parabolic sine ordinate.
     arg = deg2rad(y) / _pi(T)
-    abs(arg) <= one(T) ||
+    abs(arg) <= 1 ||
         error("PAR projection: point outside valid domain (|y*pi/180/pi| = $(abs(arg)) > 1)")
     theta = 3 * asin(clamp(arg, -one(T), one(T)))
 
     # Longitude uses the latitude-dependent parabolic scale factor.
     scale = 2 * cos(2 * theta / 3) - 1
-    if abs(scale) <= T(_PAR_EDGE_TOL)
+    if abs(scale) <= _convergence_tol(T) # wcslib tolerance is 1e-13
         # At the projected pole, WCSLIB accepts only x≈0 and sets phi=0.
-        abs(T(x)) <= T(_PAR_EDGE_TOL) && return zero(T), theta
+        abs(x) <= _convergence_tol(T) && return zero(T), theta
         error("PAR projection: longitude scale is zero")
     end
     phi = deg2rad(x) / scale
@@ -518,24 +545,24 @@ end
 # MOL – Mollweide projection   (Paper II, Eq. 90)
 # ──────────────────────────────────────────────────────────────────────────────
 
-const _MOL_MAXITER = 30
-const _MOL_TOL = 1e-14
-const _MOL_EDGE_TOL = 1e-12
-
 function _mollweide_gamma(theta::Real)
     T = _promote_float_type(theta)
 
     # Solve 2γ + sin(2γ) = π sin(theta) with Newton iteration.
-    abs(abs(theta) - _halfpi(T)) <= T(1e-14) && return copysign(_halfpi(T), theta)
+    if abs(abs(theta) - _halfpi(T)) <= _convergence_tol(T) # wcslib tolerance is 1e-14
+        return copysign(_halfpi(T), theta)
+    end
     gamma = theta
     target = _pi(T) * sin(theta)
-    for _ in 1:_MOL_MAXITER
+    for _ in 1:64
         f = 2 * gamma + sin(2 * gamma) - target
         fp = 2 + 2 * cos(2 * gamma)
         !iszero(fp) || break
         step = f / fp
         gamma -= step
-        abs(step) <= T(_MOL_TOL) && return gamma
+        if abs(step) <= _convergence_tol(T) # wcslib tolerance is 1e-14
+            return gamma
+        end
     end
     error("MOL projection: auxiliary angle solve failed to converge")
 end
@@ -551,16 +578,16 @@ function intermediate_to_native(::MOL, x::Real, y::Real)
 
     # Recover the auxiliary angle gamma from the vertical coordinate.
     sin_gamma = deg2rad(y) / sqrt2
-    abs(sin_gamma) <= one(T) + T(_MOL_EDGE_TOL) ||
+    abs(sin_gamma) <= one(T) + _boundary_tol(T) || # wcslib tolerance is 1e-12
         error("MOL projection: point outside valid domain (|sin_gamma| = $(abs(sin_gamma)) > 1)")
     gamma = asin(clamp(sin_gamma, -one(T), one(T)))
 
     # Convert gamma to native latitude and undo the longitude scale.
     theta = asin(clamp((2 * gamma + sin(2 * gamma)) / _pi(T), -one(T), one(T)))
     cos_gamma = cos(gamma)
-    if abs(cos_gamma) <= T(1e-14)
+    if abs(cos_gamma) <= _convergence_tol(T) # wcslib tolerance is 1e-14
         # WCSLIB treats the Mollweide pole as valid only for x≈0.
-        abs(T(x)) <= T(_MOL_EDGE_TOL) && return zero(T), theta
+        abs(T(x)) <= _convergence_tol(T) && return zero(T), theta # wcslib tolerance is 1e-12
         error("MOL projection: longitude is undefined at projected pole")
     end
     phi = deg2rad(x) * _pi(T) / (2 * sqrt2 * cos_gamma)
@@ -587,8 +614,6 @@ end
 # PCO – Polyconic projection   (Paper II)
 # ──────────────────────────────────────────────────────────────────────────────
 
-const _PCO_MAXITER = 64
-const _PCO_TOL = 1e-12
 const _PCO_SMALL_Y = 1e-4
 
 """
@@ -601,7 +626,7 @@ function intermediate_to_native(::PCO, x::Real, y::Real)
     xj = T(x)
     yj = T(y)
     w = abs(yj)
-    tol = T(_PCO_TOL)
+    tol = _convergence_tol(T) # wcslib tolerance is 1e-12
 
     # The equator and native poles have direct limiting inverses.
     if w <= tol
@@ -628,7 +653,7 @@ function intermediate_to_native(::PCO, x::Real, y::Real)
         xx = xj^2
         fpos = xx
         fneg = -xx
-        for _ in 1:_PCO_MAXITER
+        for _ in 1:64
             lambda = clamp(fpos / (fpos - fneg), T(0.1), T(0.9))
             theta_d = theta_pos - lambda * (theta_pos - theta_neg)
             ymtheta = yj - theta_d
@@ -664,7 +689,7 @@ function native_to_intermediate(::PCO, phi::Real, theta::Real)
     phi, theta = T(phi), T(theta)
     # Use the equatorial limit to avoid cot(theta) cancellation.
     phi_w = _wrap_native_phi(phi)
-    if abs(theta) <= T(1e-14)
+    if abs(theta) <= _convergence_tol(T) # wcslib tolerance is 1e-14
         return rad2deg(phi_w), zero(T)
     end
 
@@ -709,7 +734,7 @@ function intermediate_to_native(::AIT, x::Real, y::Real)
     theta = asin(sinT)
     cosT = cos(theta)
     # sin(phi/2) = u/(2*g*cosT); cos(phi/2) = z^2/cosT
-    if abs(cosT) < T(1e-12)
+    if abs(cosT) < _convergence_tol(T) # wcslib tolerance is 1e-12
         # At theta = ±90°, phi is undefined; return phi = 0
         return zero(T), theta
     end
@@ -773,7 +798,8 @@ function intermediate_to_native(proj::ZPN, x::Real, y::Real)
 
     # Special case: degree-0 polynomial (constant).
     if npv == 1
-        abs(target - pv[1]) < T(1e-12) || error("ZPN projection: point outside valid domain")
+        # wcslib tolerance is 1e-12
+        abs(target - pv[1]) < _convergence_tol(T) || error("ZPN projection: point outside valid domain")
         theta = _halfpi(T)
         return phi, theta
     end
@@ -792,13 +818,15 @@ function intermediate_to_native(proj::ZPN, x::Real, y::Real)
         c = T(pv[1]) - target
         b = T(pv[2])
         a = T(pv[3])
-        if abs(a) < T(1e-15)
+        if abs(a) < _convergence_tol(T) # wcslib tolerance is 1e-15
             # Degenerate to degree-1.
-            abs(b) > T(1e-15) || error("ZPN projection: degenerate polynomial")
+            # wcslib tolerance is 1e-15
+            abs(b) > _convergence_tol(T) || error("ZPN projection: degenerate polynomial")
             zd = -c / b
         else
             disc = b^2 - 4*a*c
-            disc >= -T(1e-14) || error("ZPN projection: point outside valid domain")
+            # wcslib tolerance is 1e-14
+            disc >= -_convergence_tol(T) || error("ZPN projection: point outside valid domain")
             disc = max(zero(T), disc)
             sqrt_disc = sqrt(disc)
             # Pick the smaller non-negative root (closest to the projection center).
@@ -822,7 +850,7 @@ function intermediate_to_native(proj::ZPN, x::Real, y::Real)
 
     # If target = 0 and pv[1] = 0, zd = 0 is a root (reference point).
     p_at_0 = zfn(zero(T))
-    if abs(p_at_0) < T(1e-14)
+    if abs(p_at_0) < _convergence_tol(T) # wcslib tolerance is 1e-14
         zd = zero(T)
         theta = _halfpi(T) - zd
         return phi, theta
@@ -850,7 +878,7 @@ function intermediate_to_native(proj::ZPN, x::Real, y::Real)
                     else
                         a, fa = m, fm
                     end
-                    (b - a) < T(1e-14) && break
+                    (b - a) < _convergence_tol(T) && break # wcslib tolerance is 1e-14
                 end
                 zd_max = (a + b) / 2
             end
@@ -863,7 +891,7 @@ function intermediate_to_native(proj::ZPN, x::Real, y::Real)
     pb = zfn(b)
 
     # If pa is zero we already returned above; check pb.
-    if abs(pb) < T(1e-14)
+    if abs(pb) < _convergence_tol(T) # wcslib tolerance is 1e-14
         zd = b
         theta = _halfpi(T) - zd
         return phi, theta
@@ -874,7 +902,7 @@ function intermediate_to_native(proj::ZPN, x::Real, y::Real)
     for _ in 1:64
         m  = (a + b) / 2
         pm = zfn(m)
-        if abs(pm) < T(1e-15)
+        if abs(pm) < _convergence_tol(T) # wcslib tolerance is 1e-15
             zd = m
             theta = _halfpi(T) - zd
             return phi, theta
@@ -884,7 +912,7 @@ function intermediate_to_native(proj::ZPN, x::Real, y::Real)
         else
             a, pa = m, pm
         end
-        (b - a) < T(1e-15) && break
+        (b - a) < _convergence_tol(T) && break # wcslib tolerance is 1e-15
     end
 
     zd = (a + b) / 2
@@ -917,7 +945,6 @@ end
 # AIR – Airy projection   (Paper II, Section 5.5, Eq. 30–31)
 # ──────────────────────────────────────────────────────────────────────────────
 
-const _AIR_TOL = 1e-14
 
 """
     intermediate_to_native(proj::AIR, x, y) -> (phi, theta)
@@ -943,7 +970,7 @@ function intermediate_to_native(proj::AIR, x::Real, y::Real)
     # w[0] = 2*R2D (the overall scale factor)
     w0 = 2 * R2D
 
-    if abs(xi_b) < T(_AIR_TOL)
+    if abs(xi_b) < _convergence_tol(T) # wcslib tolerance is 1e-14
         # theta_b = 90°: w[1] = -0.5 (limit of log(cos(xi))/... as xi→0)
         w1 = T(-0.5)
         w2 = one(T)  # ensures w3 is finite
@@ -964,7 +991,7 @@ function intermediate_to_native(proj::AIR, x::Real, y::Real)
     r_target = r_deg / w0
 
     # Reference point: r_target = 0 → xi = 0, theta = π/2.
-    if abs(r_target) < T(_AIR_TOL)
+    if abs(r_target) < _convergence_tol(T) # wcslib tolerance is 1e-14
         return phi, _halfpi(T)
     end
 
@@ -977,7 +1004,8 @@ function intermediate_to_native(proj::AIR, x::Real, y::Real)
         m  = (a + b) / 2
         cos_m = cos(m)
         sin_m = sin(m)
-        if abs(sin_m) < T(1e-15) || abs(cos_m) < T(1e-15)
+        # wcslib tolerance is 1e-15
+        if abs(sin_m) < _convergence_tol(T) || abs(cos_m) < _convergence_tol(T)
             b = m
             continue
         end
@@ -989,7 +1017,7 @@ function intermediate_to_native(proj::AIR, x::Real, y::Real)
         else
             b = m    # root is to the left
         end
-        (b - a) < T(1e-15) && break
+        (b - a) < _convergence_tol(T) && break # wcslib tolerance is 1e-15
     end
 
     xi = (a + b) / 2
@@ -1013,7 +1041,7 @@ function native_to_intermediate(proj::AIR, phi::Real, theta::Real)
 
     w0 = 2 * R2D
 
-    if abs(xi_b) < T(_AIR_TOL)
+    if abs(xi_b) < _convergence_tol(T) # wcslib tolerance is 1e-14
         w1 = T(-0.5)
     else
         cos_xib = cos(xi_b)
@@ -1026,7 +1054,7 @@ function native_to_intermediate(proj::AIR, phi::Real, theta::Real)
     # xi = (π/2 - theta) / 2
     xi = (_halfpi(T) - theta) / 2
 
-    if abs(xi) < T(_AIR_TOL)
+    if abs(xi) < _convergence_tol(T) # wcslib tolerance is 1e-14
         r_deg = xi * w3
     else
         cos_xi = cos(xi)
@@ -1109,7 +1137,8 @@ function native_to_intermediate(proj::COP, phi::Real, theta::Real)
     alpha_rad = C * _wrap_native_phi(phi)
     t = theta - sigma_rad
     cos_t = cos(t)
-    abs(cos_t) > T(1e-15) || error("COP: singularity at theta = sigma ± 90°")
+    # wcslib tolerance is 1e-15
+    abs(cos_t) > _convergence_tol(T) || error("COP: singularity at theta = sigma ± 90°")
 
     r_deg = Y0_deg - R2D * cos(delta_rad) * tan(t)
 
@@ -1137,12 +1166,13 @@ function intermediate_to_native(proj::COD, x::Real, y::Real)
     delta_rad = T(deg2rad(proj.delta))
 
     # Cone constant C = sin(sigma) * sinc(delta) (dimensionless)
-    C = if abs(delta_rad) < T(1e-12)
+    C = if abs(delta_rad) < _convergence_tol(T) # wcslib tolerance is 1e-12
         sin(sigma_rad)   # limit of sin(sigma)*sin(delta)/delta as delta→0
     else
         sin(sigma_rad) * sin(delta_rad) / delta_rad
     end
-    abs(C) > T(1e-15) || error("COD: degenerate case (C ≈ 0)")
+    # wcslib tolerance is 1e-15
+    abs(C) > _convergence_tol(T) || error("COD: degenerate case (C ≈ 0)")
 
     Y0_deg = R2D * cos(delta_rad) * cos(sigma_rad) / C
 
@@ -1165,19 +1195,19 @@ Forward COD projection.
 """
 function native_to_intermediate(proj::COD, phi::Real, theta::Real)
     T = _promote_float_type(phi, theta)
-    R2D = rad2deg(one(T)) # = T(180 / π)
 
-    sigma_rad = T(deg2rad(proj.sigma))
-    delta_rad = T(deg2rad(proj.delta))
+    sigma_rad = deg2rad(T(proj.sigma))
+    delta_rad = deg2rad(T(proj.delta))
 
-    C = if abs(delta_rad) < T(1e-12)
+    C = if abs(delta_rad) < _convergence_tol(T) # wcslib tolerance is 1e-12
         sin(sigma_rad)
     else
         sin(sigma_rad) * sin(delta_rad) / delta_rad
     end
-    abs(C) > T(1e-15) || error("COD: degenerate case (C ≈ 0)")
+    # wcslib tolerance is 1e-15
+    abs(C) > _convergence_tol(T) || error("COD: degenerate case (C ≈ 0)")
 
-    Y0_deg = R2D * cos(delta_rad) * cos(sigma_rad) / C
+    Y0_deg = rad2deg(cos(delta_rad) * cos(sigma_rad) / C)
 
     alpha_rad = C * _wrap_native_phi(phi)
     # r = (Y0_d + sigma_d) - theta_d
@@ -1203,13 +1233,14 @@ function intermediate_to_native(proj::COE, x::Real, y::Real)
     T = _promote_float_type(x, y)
     R2D = rad2deg(one(T)) # = T(180 / π)
 
-    sigma_rad = T(deg2rad(proj.sigma))
-    delta_rad = T(deg2rad(proj.delta))
+    sigma_rad = deg2rad(T(proj.sigma))
+    delta_rad = deg2rad(T(proj.delta))
     theta1_rad = sigma_rad - delta_rad
     theta2_rad = sigma_rad + delta_rad
 
     C = (sin(theta1_rad) + sin(theta2_rad)) / 2
-    abs(C) > T(1e-15) || error("COE: degenerate case (C ≈ 0)")
+    # wcslib tolerance is 1e-15
+    abs(C) > _convergence_tol(T) || error("COE: degenerate case (C ≈ 0)")
 
     chi = R2D / C
     psi = one(T) + sin(theta1_rad) * sin(theta2_rad)
@@ -1224,7 +1255,8 @@ function intermediate_to_native(proj::COE, x::Real, y::Real)
     phi = alpha_rad / C
 
     arg = (w6 - r_deg^2) * w7
-    abs(arg) <= one(T) + T(1e-12) || error("COE: point outside valid domain")
+    # wcslib tolerance is 1e-12
+    abs(arg) <= one(T) + _boundary_tol(T) || error("COE: point outside valid domain")
     theta = asin(clamp(arg, -one(T), one(T)))
 
     return phi, theta
@@ -1245,7 +1277,8 @@ function native_to_intermediate(proj::COE, phi::Real, theta::Real)
     theta2_rad = sigma_rad + delta_rad
 
     C = (sin(theta1_rad) + sin(theta2_rad)) / 2
-    abs(C) > T(1e-15) || error("COE: degenerate case")
+    # wcslib tolerance is 1e-15
+    abs(C) > _convergence_tol(T) || error("COE: degenerate case")
 
     chi = R2D / C
     psi = one(T) + sin(theta1_rad) * sin(theta2_rad)
@@ -1286,7 +1319,7 @@ function intermediate_to_native(proj::COO, x::Real, y::Real)
     theta2_rad = sigma_rad + delta_rad
 
     # Cone constant C.
-    C = if abs(delta_rad) < T(1e-14)
+    C = if abs(delta_rad) < _convergence_tol(T) # wcslib tolerance is 1e-14
         sin(theta1_rad)
     else
         # tau1 = (90 - theta1) / 2 in radians,  tan1 = tan(tau1)
@@ -1304,7 +1337,7 @@ function intermediate_to_native(proj::COO, x::Real, y::Real)
 
     phi = alpha_rad / C
 
-    if abs(r_deg) < T(1e-14)
+    if abs(r_deg) < _convergence_tol(T) # wcslib tolerance is 1e-14
         theta = C < 0 ? -_halfpi(T) : error("COO: singularity at origin")
     else
         theta = _halfpi(T) - 2 * atan((r_deg / psi)^(one(T) / C))
@@ -1327,7 +1360,7 @@ function native_to_intermediate(proj::COO, phi::Real, theta::Real)
     theta1_rad = sigma_rad - delta_rad
     theta2_rad = sigma_rad + delta_rad
 
-    C = if abs(delta_rad) < T(1e-14)
+    C = if abs(delta_rad) < _convergence_tol(T) # wcslib tolerance is 1e-14
         sin(theta1_rad)
     else
         tau1_l = (_halfpi(T) - theta1_rad) / 2
@@ -1393,7 +1426,7 @@ function intermediate_to_native(proj::BON, x::Real, y::Real)
     theta = deg2rad(theta_deg)
     cos_theta = cos(theta)
 
-    if abs(cos_theta) < T(1e-12)
+    if abs(cos_theta) < _convergence_tol(T) # wcslib tolerance is 1e-12
         phi = zero(T)
     else
         # phi_rad = alpha_rad * r_rad / cos_theta  where r_rad = r_deg/R2D
@@ -1429,7 +1462,7 @@ function native_to_intermediate(proj::BON, phi::Real, theta::Real)
     # alpha_rad = deg2rad(alpha_deg) = R2D * phi_rad * cos(theta) / r_deg.
     # wcslib calls prjoff(0, 0) so prj->y0 = 0, and the y-offset is
     # y0_eff = prj->y0 - w[2] = -Y0_deg, giving y = -r*cos(alpha) + Y0_deg.
-    if abs(r_deg) < T(1e-14)
+    if abs(r_deg) < _convergence_tol(T) # wcslib tolerance is 1e-14
         alpha_rad = zero(T)
     else
         alpha_rad = phi * cos(theta) * R2D / r_deg
@@ -1527,7 +1560,7 @@ end
 # WCSLIB 8.9 inverse face determination (tscx2s, cscx2s, qscx2s).
 # scale = 45.0 (w[0]) — face coordinate scaling in degrees/unit.
 function _cube_xy_to_face(x_deg::T, y_deg::T, scale::T) where {T <: Real}
-    TOL = T(1e-13)
+    TOL = _boundary_tol(T) # wcslib tolerance is 1e-13
     xf = x_deg / scale
     yf = y_deg / scale
 
@@ -1760,23 +1793,24 @@ end
 # When |a|>=|b|: chi ≈ a*(pi/4) approximately. Solve by Newton:
 function _qsc_inverse(xf::T, yf::T) where {T <: Real}
     # WCSLIB 8.9 qscx2s: face coords → (zeta, w, omega, direct).
-    if abs(xf) < T(1e-15) && abs(yf) < T(1e-15)
+    # wcslib tolerance is 1e-15
+    if abs(xf) < _convergence_tol(T) && abs(yf) < _convergence_tol(T)
         return one(T), zero(T), zero(T), true, xf, yf
     end
-    SQRT2INV = one(T) / sqrt(T(2))
+    SQRT2INV = 1 / sqrt(T(2))
     direct = abs(xf) > abs(yf)
     if direct
         w = 15 * yf / xf
         omega = sind(w) / (cosd(w) - SQRT2INV)
-        tau = one(T) + omega^2
-        zeco = xf^2 * (one(T) - one(T) / sqrt(one(T) + tau))
-        zeta = one(T) - zeco
+        tau = 1 + omega^2
+        zeco = xf^2 * (1 - 1 / sqrt(1 + tau))
+        zeta = 1 - zeco
     else
         w = 15 * xf / yf
         omega = sind(w) / (cosd(w) - SQRT2INV)
-        tau = one(T) + omega^2
-        zeco = yf^2 * (one(T) - one(T) / sqrt(one(T) + tau))
-        zeta = one(T) - zeco
+        tau = 1 + omega^2
+        zeco = yf^2 * (1 - 1 / sqrt(1 + tau))
+        zeta = 1 - zeco
     end
     return zeta, w, omega, direct, xf, yf
 end
