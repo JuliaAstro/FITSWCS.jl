@@ -24,17 +24,15 @@ All arguments and return values are in radians.
 Paper II, Eq. 2.
 """
 function native_to_celestial(phi::Real, theta::Real,
-                              alpha_p::Real, delta_p::Real, phi_p::Real)
-    dphi   = phi - phi_p
-    sin_th = sin(theta)
-    cos_th = cos(theta)
-    sin_dp = sin(dphi)
-    cos_dp = cos(dphi)
-    sin_delp = sin(delta_p)
-    cos_delp = cos(delta_p)
+                             alpha_p::Real, delta_p::Real, phi_p::Real)
+    T = _promote_float_type(phi, theta, alpha_p, delta_p, phi_p)
+    dphi = phi - phi_p
+    sin_th, cos_th = sincos(theta)
+    sin_dp, cos_dp = sincos(dphi)
+    sin_delp, cos_delp = sincos(delta_p)
 
     # Paper II, Eq. 2
-    delta = asin(clamp(sin_th * sin_delp + cos_th * cos_delp * cos_dp, -1.0, 1.0))
+    delta = asin(clamp(sin_th * sin_delp + cos_th * cos_delp * cos_dp, -one(T), one(T)))
     alpha = alpha_p + atan(-cos_th * sin_dp, sin_th * cos_delp - cos_th * sin_delp * cos_dp)
     return alpha, delta
 end
@@ -51,19 +49,17 @@ Paper II, Eq. 5.
 """
 function celestial_to_native(alpha::Real, delta::Real,
                               alpha_p::Real, delta_p::Real, phi_p::Real)
-    da     = alpha - alpha_p
-    sin_de = sin(delta)
-    cos_de = cos(delta)
-    sin_da = sin(da)
-    cos_da = cos(da)
-    sin_dp = sin(delta_p)
-    cos_dp = cos(delta_p)
+    T = _promote_float_type(alpha, delta, alpha_p, delta_p, phi_p)
+    da = alpha - alpha_p
+    sin_de, cos_de = sincos(delta)
+    sin_da, cos_da = sincos(da)
+    sin_dp, cos_dp = sincos(delta_p)
 
     # Paper II, Eq. 5
-    theta = asin(clamp(sin_de * sin_dp + cos_de * cos_dp * cos_da, -1.0, 1.0))
-    phi   = phi_p + atan(-cos_de * sin_da, sin_de * cos_dp - cos_de * sin_dp * cos_da)
+    theta = asin(clamp(sin_de * sin_dp + cos_de * cos_dp * cos_da, -one(T), one(T)))
+    phi = phi_p + atan(-cos_de * sin_da, sin_de * cos_dp - cos_de * sin_dp * cos_da)
     # Normalise phi to [-π, π] (WCSLIB convention).
-    phi = mod(phi + π, 2π) - π
+    phi = mod(phi + _pi(T), 2 * _pi(T)) - _pi(T)
     return phi, theta
 end
 
@@ -129,11 +125,14 @@ Arguments (all in radians):
 Paper II, Section 2.4, Eq. 11.
 """
 function compute_native_pole(alpha0::Real, delta0::Real,
-                              phi0::Real, theta0::Real, phi_p::Real,
-                              latpole::Real = π/2)
+                             phi0::Real, theta0::Real, phi_p::Real,
+                             latpole::Real = π/2)
+    T = _promote_float_type(alpha0, delta0, phi0, theta0, phi_p) # Exclude latpole to avoid promoting to Float64 unnecessarily.
+    tol = _convergence_tol(T)
+
     # Zenithal (theta0 = 90°): unique solution delta_p = delta0, alpha_p = alpha0.
-    if abs(theta0 - π/2) < 1e-10
-        return alpha0, delta0
+    if abs(theta0 - _halfpi(T)) < tol
+        return T(alpha0), T(delta0)
     end
 
     # General: from Paper II Eq. 2 at the fiducial point,
@@ -143,47 +142,36 @@ function compute_native_pole(alpha0::Real, delta0::Real,
     # where R = hypot(A, B), rhs = sin(delta0)/R, psi = atan(A, B).
 
     dphi = phi0 - phi_p
-    A    = sin(theta0)
-    B    = cos(theta0) * cos(dphi)
-    R    = hypot(A, B)
+    sin_th, cos_th = sincos(T(theta0))
+    A = sin_th
+    B = cos_th * cos(dphi)
+    R = hypot(A, B)
 
-    local delta_p::Float64
-
-    if R < 1e-12
-        delta_p = latpole
+    delta_p = if R < tol
+        T(latpole)
     else
-        rhs = clamp(sin(delta0) / R, -1.0, 1.0)
-        # psi is the offset such that A*sin(x) + B*cos(x) = R*sin(x + psi)
-        # → psi = atan(B, A)    [atan(y, x) such that sin(psi)=B/R, cos(psi)=A/R]
-        # Wait: A*sin(x)+B*cos(x) = R*sin(x + atan(B/A)) only if using atan2.
-        # More precisely: A*sin(x)+B*cos(x) = R*sin(x+psi) where psi=atan(B,A).
-        # Then x + psi = asin(rhs) or pi - asin(rhs).
-        psi = atan(B, A)   # atan2(B, A) — angle such that cos(psi)=A/R, sin(psi)=B/R
+        rhs = clamp(sin(T(delta0)) / R, -one(T), one(T))
+        psi = atan(B, A)
 
         s1  = asin(rhs)         # principal asin value in [-π/2, π/2]
         dp1 = s1 - psi          # first candidate
-        dp2 = π - s1 - psi      # second candidate (supplementary angle)
+        dp2 = _pi(T) - s1 - psi   # second candidate (supplementary angle)
 
-        # Wrap both to valid latitude range [-π/2, π/2].
-        # A latitude delta_p = d is the same as d + 2π*k. Valid range: [-π/2, π/2].
-        # Equivalently, we require: -1 <= sin(delta_p) <= 1 (always true).
-        # But delta_p as a geographic latitude must be in [-π/2, π/2].
-        # Reduce modulo 2π, then reflect if outside [-π/2, π/2].
         dp1 = _reduce_lat(dp1)
         dp2 = _reduce_lat(dp2)
 
         # Disambiguate: choose candidate closer to latpole.
-        delta_p = (abs(dp1 - latpole) <= abs(dp2 - latpole)) ? dp1 : dp2
+        (abs(dp1 - T(latpole)) <= abs(dp2 - T(latpole))) ? dp1 : dp2
     end
 
     # Compute alpha_p from Paper II Eq. 2 (alpha part):
-    numer = -cos(theta0) * sin(dphi)
-    denom =  sin(theta0) * cos(delta_p) - cos(theta0) * sin(delta_p) * cos(dphi)
+    numer = -cos_th * sin(dphi)
+    denom =  sin_th * cos(delta_p) - cos_th * sin(delta_p) * cos(dphi)
 
-    alpha_p = if abs(numer) < 1e-10 && abs(denom) < 1e-10
-        alpha0   # Degenerate: delta_p = ±90°; alpha_p is arbitrary.
+    alpha_p = if abs(numer) < tol && abs(denom) < tol
+        T(alpha0)   # Degenerate: delta_p = ±90°; alpha_p is arbitrary.
     else
-        alpha0 - atan(numer, denom)
+        T(alpha0) - atan(numer, denom)
     end
 
     return alpha_p, delta_p
@@ -194,17 +182,18 @@ Reduce angle d (radians) to the valid latitude range [-π/2, π/2].
 Uses modular reduction to find the equivalent latitude value.
 """
 function _reduce_lat(d::Real)
-    # Map to [0, 2π) first.
-    d = mod(d, 2π)
-    # Map (π/2, 3π/2) → reflected, (3π/2, 2π) → negative.
-    if d <= π/2
+    T = _float_type(typeof(d))
+    pi_T = _pi(T)
+    halfpi = _halfpi(T)
+    d = mod(d, 2 * pi_T)
+    if d <= halfpi
         return d              # already in [0, π/2]
-    elseif d <= π
-        return π - d          # reflect: (π/2, π] → [0, π/2)  [incorrect sign!]
-    elseif d <= 3π/2
-        return -(d - π)       # (π, 3π/2] → [0, -π/2]
+    elseif d <= pi_T
+        return pi_T - d       # reflect: (π/2, π] → [0, π/2)  [incorrect sign!]
+    elseif d <= pi_T + halfpi
+        return -(d - pi_T)    # (π, 3π/2] → [0, -π/2]
     else
-        return d - 2π         # (3π/2, 2π) → (-π/2, 0)
+        return d - 2 * pi_T   # (3π/2, 2π) → (-π/2, 0)
     end
 end
 
