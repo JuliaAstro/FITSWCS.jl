@@ -8,6 +8,7 @@ using StaticArrays
 using FITSWCS: pixel_to_intermediate, intermediate_to_pixel,
                parse_ctype, projection_from_code,
                native_to_celestial, celestial_to_native,
+               compute_native_pole,
                unit_to_deg, build_cd_matrix,
                evaluate_sip_polynomial, sip_pixel_to_focal, sip_focal_to_pixel
 
@@ -1116,15 +1117,19 @@ end
         end
     end
 
-    # Non-default AZP/SZP parameters remain deferred rather than silently ignored.
-    @test_throws ArgumentError from_header(Dict(
+    # Non-default AZP/SZP parameters parse and roundtrip correctly.
+    azp_wcs = from_header(Dict(
         "NAXIS" => 2, "CTYPE1" => "RA---AZP", "CTYPE2" => "DEC--AZP",
-        "PV2_1" => 1.0,
+        "CRPIX1" => 128.0, "CRPIX2" => 96.0, "CRVAL1" => 120.0, "CRVAL2" => 35.0,
+        "CDELT1" => -0.05, "CDELT2" => 0.05, "PV2_1" => 1.0,
     ))
-    @test_throws ArgumentError from_header(Dict(
+    @test azp_wcs.projection == AZP(1.0, 0.0)
+    szp_wcs = from_header(Dict(
         "NAXIS" => 2, "CTYPE1" => "RA---SZP", "CTYPE2" => "DEC--SZP",
-        "PV2_3" => 45.0,
+        "CRPIX1" => 128.0, "CRPIX2" => 96.0, "CRVAL1" => 120.0, "CRVAL2" => 35.0,
+        "CDELT1" => -0.05, "CDELT2" => 0.05, "PV2_3" => 45.0,
     ))
+    @test szp_wcs.projection == SZP(0.0, 0.0, 45.0)
 end
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -1664,6 +1669,54 @@ end
     end
 end
 
+    @testset "compute_native_pole type stability" begin
+        halfpi64 = π / 2
+        halfpi32 = Float32(π / 2)
+
+        # ── Float64 ──────────────────────────────────────────
+        # Branch 1: zenithal (theta0 ≈ 90°)
+        @test compute_native_pole(0.0, 0.0, 0.0, halfpi64, 0.0, halfpi64) isa Tuple{Float64,Float64}
+        @inferred compute_native_pole(0.0, 0.0, 0.0, halfpi64, 0.0)
+
+        # Branch 2: degenerate R (sin(theta0) ≈ 0, cos(dphi) ≈ 0)
+        @test compute_native_pole(0.0, 0.0, halfpi64, 0.0, 0.0, halfpi64) isa Tuple{Float64,Float64}
+        @inferred compute_native_pole(0.0, 0.0, halfpi64, 0.0, 0.0)
+
+        # Branch 4: normal path
+        @test compute_native_pole(0.0, deg2rad(45.0), 0.0, deg2rad(45.0), 0.0, halfpi64) isa Tuple{Float64,Float64}
+        @inferred compute_native_pole(0.0, deg2rad(45.0), 0.0, deg2rad(45.0), 0.0)
+
+        # ── Float32 ──────────────────────────────────────────
+        # Branch 1: zenithal
+        @test compute_native_pole(0f0, 0f0, 0f0, halfpi32, 0f0, halfpi32) isa Tuple{Float32,Float32}
+        @inferred compute_native_pole(0f0, 0f0, 0f0, halfpi32, 0f0)
+
+        # Branch 2: degenerate R
+        @test compute_native_pole(0f0, 0f0, halfpi32, 0f0, 0f0, halfpi32) isa Tuple{Float32,Float32}
+        @inferred compute_native_pole(0f0, 0f0, halfpi32, 0f0, 0f0)
+
+        # Branch 4: normal path
+        @test compute_native_pole(0f0, 1f0, 0f0, 1f0, 0f0, halfpi32) isa Tuple{Float32,Float32}
+        @inferred compute_native_pole(0f0, 1f0, 0f0, 1f0, 0f0)
+
+        # ── Default latpole with Float32 inputs ──────────────
+        # Float64 default arg must not infect the return type.
+        ap, dp = compute_native_pole(0f0, 1f0, 0f0, 1f0, 0f0)
+        @test ap isa Float32
+        @test dp isa Float32
+
+        # ── Int inputs → Float64 promotion ───────────────────
+        # Standard Julia promotion: float(Int) = Float64.
+        @test compute_native_pole(0, 0, 0, 90, 0, 90) isa Tuple{Float64,Float64}
+        @inferred compute_native_pole(0, 0, 0, 90, 0)
+
+        # ── _reduce_lat ──────────────────────────────────────
+        @inferred FITSWCS._reduce_lat(1.0)
+        @inferred FITSWCS._reduce_lat(1.0f0)
+        @test FITSWCS._reduce_lat(1.0) isa Float64
+        @test FITSWCS._reduce_lat(1.0f0) isa Float32
+        @test FITSWCS._reduce_lat(1) isa Float64
+    end
 end  # @testset "FITSWCS"
 
 # Regression tests against wcslib reference values (Milestone 5).

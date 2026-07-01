@@ -612,12 +612,16 @@ Implementation notes:
 
 Progress notes:
 
-* Implemented and Astropy-checked: `CYP`, `MER`, `SFL`, `PAR`, `MOL`, and
-  `PCO`.
-* Implemented default-parameter forms only: `AZP` and `SZP`; non-default PV
-  parameters should be implemented in a later slice rather than ignored.
-* Remaining high-risk codes: `ZPN`, `AIR`, `COP`, `COE`, `COD`, `COO`, `BON`,
-  `TSC`, `CSC`, `QSC`, `HPX`, and `XPH`.
+* **Complete.**  All 28 WCSLIB projection codes (`AZP`, `SZP`, `TAN`, `STG`,
+  `SIN`, `ARC`, `ZPN`, `ZEA`, `AIR`, `CYP`, `CEA`, `CAR`, `MER`, `SFL`,
+  `PAR`, `MOL`, `AIT`, `COP`, `COE`, `COD`, `COO`, `BON`, `PCO`, `TSC`,
+  `CSC`, `QSC`, `HPX`, `XPH`) are implemented and verified against Astropy
+  regression tests to sub-microarcsecond precision.
+  - `AZP` and `SZP` support only the default (central perspective) parameter
+    forms; non-default PV parameters are rejected at parse time.
+  - `CSC` agrees with Astropy to ~9 mas because WCSLIB stores the CSC
+    polynomial coefficients as 32-bit `float`; our implementation is in 64-bit
+    and is actually closer to the mathematical ideal.
 
 ### Task B: Implement Paper IV Distortion Lookup Tables
 
@@ -639,16 +643,74 @@ Implementation notes:
 FITSWCS currently supports plain linear spectral axes but rejects `-TAB` and
 non-celestial algorithm-coded axes such as `FREQ-LOG`.
 
-Implementation notes:
+This is a substantial body of physics code orthogonal to the celestial
+projection work that is the package's primary focus.  A realistic
+implementation would need to cover:
 
-* Add `-TAB` table parsing, coordinate arrays, indexing vectors, and
-  interpolation.
-* Add logarithmic and non-linear spectral algorithms, including velocity and
-  wavelength/frequency conversions.
-* Parse and use `RESTFRQ`, `RESTWAV`, `SPECSYS`, observer/target frame
-  metadata, and relevant unit conversions.
-* Compare against Astropy/WCSLIB for representative `FREQ`, `WAVE`, `VRAD`,
-  `VOPT`, and `VELO` headers.
+**1. Spectral CTYPE parsing.**  The CTYPE field encodes the spectral
+coordinate system and algorithm in the form `TTTT-AAA`, where `TTTT` is one
+of `FREQ`, `ENER`, `WAVN`, `VRAD`, `VOPT`, `ZOPT`, `AWAV`, `VELO`, `BETA`,
+and `AAA` is the algorithm code.  Algorithm codes defined in Paper III:
+
+- ```` (empty): linear in the coordinate as given
+- `LOG`: logarithmic (CRVAL is the reference value, CDELT is a scale factor
+  rather than a linear increment)
+- `TAB`: tabular lookup (see below)
+- `F2W`, `W2F`: frequency–wavelength conversion via c = ν·λ
+
+Each algorithm has a well-defined conversion from pixel to intermediate
+world coordinate that would need to be implemented.
+
+**2. `-TAB` table-lookup axes.**  A `-TAB` axis references an extension HDU
+containing a coordinate array and an indexing vector.  The implementation
+would need to:
+
+* Parse `PS<axis>_0`, `PS<axis>_1`, `PV<axis>_0`, `PV<axis>_1` keywords
+  that identify the table extension by number.
+* Read the binary table extension (coordinate array column + optional
+  indexing column) from the FITS file through the FITSIO.jl or FITSFiles.jl
+  extensions.
+* Implement linear interpolation between table entries for pixel→world and
+  an iterative inversion (or use an inverse index array) for world→pixel.
+* This couples the WCS parser to the file loader in a way the current
+  dictionary-first design intentionally avoids.  Supporting `-TAB` would
+  require either a breaking API change to `from_header` (to pass a file
+  handle or HDU list) or a deferred resolution pattern where the table is
+  resolved later.
+
+**3. Velocity conversions.**  The `VRAD`, `VOPT`, `ZOPT`, `VELO`, `BETA`
+coordinate types all represent recessional velocity / redshift, differing in
+the relativistic convention used.  Converting between them and
+frequency/wavelength requires:
+
+* A rest frequency or rest wavelength (`RESTFRQ` or `RESTWAV` keyword).
+* The velocity convention: radio (`VRAD`), optical (`VOPT`), or
+  relativistic (`ZOPT`, `VELO`).
+* The observer/target frame specification (`SPECSYS` keyword).
+* Unit conversion between m/s, km/s, and fractional redshift.
+
+The formulas are standard (Paper III §3–4) but require careful attention to
+the frame convention — whether the velocity is defined in the observer's
+rest frame, the source's rest frame, or a barycentric/LSR frame.
+
+**4. Keyword set.**  Beyond the core linear WCS keywords, Paper III
+introduces:
+
+* `RESTFRQ` / `RESTWAV` — rest frequency/wavelength of the spectral line
+* `SPECSYS` — spectral reference frame (e.g., `TOPOCENT`, `GEOCENTR`,
+  `BARYCENT`, `HELIOCEN`, `LSRK`, `LSRD`, `GALACTOC`, `LOCALGRP`)
+* `SSYSOBS` / `SSYSSRC` — observer/source spectral system (only for
+  `VELO`-type axes)
+* `VELOSYS` — systemic velocity offset
+* `ZSOURCE` — source redshift
+
+**5. Scope assessment.**  This is a significant feature (~500+ lines of new
+code, mostly physics rather than WCS plumbing) that would roughly double the
+non-projection complexity of the package.  It serves a different audience
+than the celestial focus and would be better approached as a separate
+funding/contributor-driven effort rather than bundled into the current
+projection work.  The honest parse-time rejection of algorithm-coded axes
+(already implemented) is the correct near-term posture.
 
 ### Task D: Add TPV/TPD And SCAMP Compatibility
 

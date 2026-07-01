@@ -12,32 +12,6 @@ in **degrees**.  This matches the FITS WCS Paper II convention.
 """
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Type-aware numerical tolerances
-# ──────────────────────────────────────────────────────────────────────────────
-
-"""
-    _boundary_tol(T)
-
-Slack for domain-boundary checks.  Returns a small multiple of machine epsilon
-so that points landing fractionally outside the valid domain due to
-floating-point roundoff are accepted.  Matches WCSLIB conventions for `Float64`
-(≈ 1e-12).
-"""
-_boundary_tol(::Type{Float64}) = 1e-12
-_boundary_tol(::Type{Float32}) = 1f-4
-_boundary_tol(T::Type) = T(min(1000 * eps(T), _boundary_tol(Float32)))
-
-"""
-    _convergence_tol(T)
-
-Tolerance for iterative convergence (Newton, bisection) and near-pole /
-near-zero guards.  Matches WCSLIB conventions for `Float64` (≈ 1e-14).
-"""
-_convergence_tol(::Type{Float64}) = 1e-14
-_convergence_tol(::Type{Float32}) = 1f-5
-_convergence_tol(T::Type) = T(min(100 * eps(T), _convergence_tol(Float32)))
-
-# ──────────────────────────────────────────────────────────────────────────────
 # Shared zenithal utilities
 # ──────────────────────────────────────────────────────────────────────────────
 
@@ -67,47 +41,184 @@ Wrap native longitude to the local projection branch around φ₀ = 0.
 @inline _wrap_native_phi(phi::T) where {T <: Real} = phi - T(2π) * round(phi / T(2π))
 
 # ──────────────────────────────────────────────────────────────────────────────
-# AZP/SZP default perspective forms
+# AZP – Zenithal perspective projection   (Paper II, Eq. 25–27)
 # ──────────────────────────────────────────────────────────────────────────────
 
-"""
-    intermediate_to_native(::AZP, x, y) -> (phi, theta)
-
-Inverse AZP projection for the default parameter form.
-"""
-function intermediate_to_native(::AZP, x::Real, y::Real)
-    # Default AZP is equivalent to the central gnomonic perspective.
-    return intermediate_to_native(TAN(), x, y)
+# Precompute WCSLIB w[] array from μ and γ.
+function _azp_derived(mu::T, gamma_deg::T) where {T <: Real}
+    w0 = rad2deg(mu + 1)          # r0*(μ+1)
+    w0 == 0 && error("AZP: μ must be > -1")
+    w3 = cosd(gamma_deg)
+    w3 == 0 && error("AZP: γ must not be 90°")
+    w2 = 1 / w3                          # 1/cos(γ)
+    w4 = sind(gamma_deg)                      # sin(γ)
+    w1 = w4 / w3                              # tan(γ)
+    w5 = abs(mu) > 1 ? asind(-1 / mu) : T(-90)  # divergence limit
+    w6 = mu * w3                              # μ*cos(γ)
+    w7 = abs(w6) < 1 ? one(T) : zero(T)       # divergence flag
+    return (; w0, w1, w2, w3, w4, w5, w6, w7)
 end
 
 """
-    native_to_intermediate(::AZP, phi, theta) -> (x, y)
+    intermediate_to_native(proj::AZP, x, y) -> (phi, theta)
 
-Forward AZP projection for the default parameter form.
+Inverse AZP projection.  WCSLIB 8.9 azpx2s.
 """
-function native_to_intermediate(::AZP, phi::Real, theta::Real)
-    # Default AZP is equivalent to TAN; non-default PV parameters are rejected at parse time.
-    return native_to_intermediate(TAN(), phi, theta)
+function intermediate_to_native(proj::AZP, x::Real, y::Real)
+    T = _promote_float_type(x, y)
+    w = _azp_derived(T(proj.mu), T(proj.gamma))
+    xj = T(x)
+    yj = T(y)
+    yc  = yj * w.w3
+    yc2 = yc^2
+    q   = w.w0 + yj * w.w4
+
+    r = hypot(xj, yc)
+    if iszero(r)
+        return zero(T), _halfpi(T)   # projection centre
+    end
+
+    phi = iszero(xj) && iszero(yc) ? zero(T) : atan(xj, -yc)
+    s = r / q
+    t = s * T(proj.mu) / sqrt(s^2 + 1)
+    s = atan(one(T), s)
+
+    t = clamp(t, -one(T), one(T))
+    t = asin(t)
+
+    a = s - t
+    b = s + t + _pi(T)
+    if a > _halfpi(T)
+        a -= T(2 * _pi(T))
+    end
+    if b > _halfpi(T)
+        b -= T(2 * _pi(T))
+    end
+    theta = a > b ? a : b
+    return phi, theta
 end
 
 """
-    intermediate_to_native(::SZP, x, y) -> (phi, theta)
+    native_to_intermediate(proj::AZP, phi, theta) -> (x, y)
 
-Inverse SZP projection for the default parameter form.
+Forward AZP projection.  WCSLIB 8.9 azps2x.
 """
-function intermediate_to_native(::SZP, x::Real, y::Real)
-    # Default SZP reduces to the same central perspective as TAN.
-    return intermediate_to_native(TAN(), x, y)
+function native_to_intermediate(proj::AZP, phi::Real, theta::Real)
+    T = _promote_float_type(phi, theta)
+    mu = T(proj.mu)
+    w = _azp_derived(mu, T(proj.gamma))
+
+    sinphi, cosphi = sincos(phi)
+    sinth, costh  = sincos(theta)
+
+    s = w.w1 * cosphi
+    t = (mu + sinth) + costh * s
+    if iszero(t)
+        return zero(T), zero(T)   # singularity
+    end
+    r = w.w0 * costh / t
+
+    x =  r * sinphi
+    y = -r * cosphi * w.w2
+    return x, y
+end
+
+# ──────────────────────────────────────────────────────────────────────────────
+# SZP – Slant zenithal perspective projection   (Paper II, Eq. 31–33)
+# ──────────────────────────────────────────────────────────────────────────────
+
+function _szp_derived(mu::T, phi_c_deg::T, theta_c_deg::T) where {T <: Real}
+    w0 = deg2rad(one(T)) # 1/r0
+    w3 = mu * sind(theta_c_deg) + 1
+    w3 == 0 && error("SZP: μ must satisfy μ*sin(θ_c) + 1 ≠ 0")
+    w1 = -mu * cosd(theta_c_deg) * sind(phi_c_deg)    # xp
+    w2 =  mu * cosd(theta_c_deg) * cosd(phi_c_deg)    # yp
+    w4 = rad2deg(w1) # r0*xp
+    w5 = rad2deg(w2) # r0*yp
+    w6 = rad2deg(w3) # r0*zp
+    w7 = (w3 - 1) * w3 - 1  # (zp-1)²
+    w8 = abs(w3 - 1) < 1 ? asind(1 - w3) : T(-90)  # theta divergence
+    return (; w0, w1, w2, w3, w4, w5, w6, w7, w8)
 end
 
 """
-    native_to_intermediate(::SZP, phi, theta) -> (x, y)
+    intermediate_to_native(proj::SZP, x, y) -> (phi, theta)
 
-Forward SZP projection for the default parameter form.
+Inverse SZP projection.  WCSLIB 8.9 szpx2s.
 """
-function native_to_intermediate(::SZP, phi::Real, theta::Real)
-    # Default SZP is equivalent to TAN; slant PV parameters are rejected at parse time.
-    return native_to_intermediate(TAN(), phi, theta)
+function intermediate_to_native(proj::SZP, x::Real, y::Real)
+    T = _promote_float_type(x, y)
+    w = _szp_derived(T(proj.mu), T(proj.phi_c), T(proj.theta_c))
+    tol = _convergence_tol(T)
+
+    xr = T(x) * w.w0
+    yr = T(y) * w.w0
+    r2 = xr^2 + yr^2
+
+    x1 = (xr - w.w1) / w.w3
+    y1 = (yr - w.w2) / w.w3
+    xy = xr*x1 + yr*y1
+
+    if r2 < _boundary_tol(T) # wcslib tolerance is 1e-10
+        z   = r2 / 2
+        theta = _halfpi(T) - rad2deg(sqrt(r2 / (1 + xy)))
+    else
+        t = x1^2 + y1^2
+        a = t + 1
+        b = xy - t
+        c = r2 - xy - xy + t - 1
+        d = b^2 - a*c
+        if d < 0
+            return zero(T), zero(T)   # no solution
+        end
+        d = sqrt(d)
+        sth1 = (-b + d) / a
+        sth2 = (-b - d) / a
+        sth = sth1 > sth2 ? sth1 : sth2
+        if sth > 1
+            if sth - 1 < tol; sth = one(T)
+            else; sth = sth1 < sth2 ? sth1 : sth2; end
+        end
+        if sth < -1
+            if sth + 1 > -tol; sth = -one(T); end
+        end
+        if sth > 1 || sth < -1
+            return zero(T), zero(T)
+        end
+        theta = asin(sth)
+        z = 1 - sth
+    end
+
+    dx = xr - x1*z
+    dy = yr - y1*z
+    phi = (iszero(dx) && iszero(dy)) ? zero(T) : atan(dx, -dy)
+    return phi, theta
+end
+
+"""
+    native_to_intermediate(proj::SZP, phi, theta) -> (x, y)
+
+Forward SZP projection.  WCSLIB 8.9 szps2x.
+"""
+function native_to_intermediate(proj::SZP, phi::Real, theta::Real)
+    T = _promote_float_type(phi, theta)
+    w = _szp_derived(T(proj.mu), T(proj.phi_c), T(proj.theta_c))
+
+    sinphi, cosphi = sincos(phi)
+    s = 1 - sin(theta)     # 1 - sin(theta)
+    t = w.w3 - s
+
+    if iszero(t)
+        return zero(T), zero(T)
+    end
+
+    r = w.w6 * cos(theta) / t
+    u = w.w4 * s / t
+    v = w.w5 * s / t
+
+    x =  r * sinphi - u
+    y = -r * cosphi - v
+    return x, y
 end
 
 # ──────────────────────────────────────────────────────────────────────────────

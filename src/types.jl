@@ -12,16 +12,35 @@ abstract type AbstractProjection end
 """    AZP
 
 Zenithal perspective projection.  FITS projection code `AZP`.
-The current implementation supports the default parameter form.
+
+Parameters: `mu` (PV<lat>_1, distance from sphere center, default 0),
+`gamma` (PV<lat>_2, tilt angle in degrees, default 0).
+When both are zero the projection degenerates to TAN (gnomonic).
+
+Paper II, Eq. 25–27.
 """
-struct AZP <: AbstractProjection end
+struct AZP <: AbstractProjection
+    mu::Float64
+    gamma::Float64
+end
+AZP() = AZP(0.0, 0.0)
 
 """    SZP
 
 Slant zenithal perspective projection.  FITS projection code `SZP`.
-The current implementation supports the default parameter form.
+
+Parameters: `mu` (PV<lat>_1, distance from sphere center, default 0),
+`phi_c` (PV<lat>_2, native longitude of slant, default 0),
+`theta_c` (PV<lat>_3, native latitude of slant, default 90).
+
+Paper II, Eq. 31–33.
 """
-struct SZP <: AbstractProjection end
+struct SZP <: AbstractProjection
+    mu::Float64
+    phi_c::Float64
+    theta_c::Float64
+end
+SZP() = SZP(0.0, 0.0, 90.0)
 
 """    TAN
 

@@ -634,3 +634,61 @@ end
         end
     end
 end
+
+@testset "AZP non-default parameters (Astropy comparison)" begin
+    for (mu, gamma, refs) in [
+        (1.0, 0.0, [
+            ([128.0,  96.0], [120.0, 35.0]),
+            ([140.0,  96.0], [119.26755506653367, 34.9978003230136]),
+            ([128.0, 110.0], [120.0, 35.699991293213685]),
+            ([100.0,  80.0], [121.69237652063921, 34.188273274746514]),
+            ([160.0, 120.0], [118.01786794817521, 36.18384787674054]),
+        ]),
+        (0.5, 10.0, [
+            ([128.0,  96.0], [120.0, 35.0]),
+            ([140.0,  96.0], [119.2675617595137, 34.99780036321464]),
+            ([128.0, 110.0], [120.0, 35.68837524456103]),
+            ([100.0,  80.0], [121.69522628730695, 34.199163207946995]),
+            ([160.0, 120.0], [118.02338512203237, 36.16273267794676]),
+        ]),
+    ]
+        hdr = Dict(
+            "NAXIS"  => 2,
+            "CTYPE1" => "RA---AZP",  "CTYPE2" => "DEC--AZP",
+            "CRPIX1" => 128.0,       "CRPIX2" => 96.0,
+            "CRVAL1" => 120.0,       "CRVAL2" => 35.0,
+            "CDELT1" => -0.05,       "CDELT2" => 0.05,
+            "PV2_1"  => mu,          "PV2_2"  => gamma,
+        )
+        wcs = from_header(hdr)
+        for (pix, world_ref) in refs
+            world = pixel_to_world(wcs, pix)
+            @test world ≈ world_ref atol=1e-10
+            @test world_to_pixel(wcs, world_ref) ≈ pix atol=1e-8
+        end
+    end
+end
+
+@testset "SZP non-default parameters (Astropy comparison)" begin
+    hdr = Dict(
+        "NAXIS"  => 2,
+        "CTYPE1" => "RA---SZP",  "CTYPE2" => "DEC--SZP",
+        "CRPIX1" => 128.0,       "CRPIX2" => 96.0,
+        "CRVAL1" => 120.0,       "CRVAL2" => 35.0,
+        "CDELT1" => -0.05,       "CDELT2" => 0.05,
+        "PV2_1"  => 2.0,         "PV2_2"  => 30.0,
+        "PV2_3"  => 60.0,
+    )
+    wcs = from_header(hdr)
+    for (pix, world_ref) in [
+        ([128.0,  96.0], [120.0, 35.0]),
+        ([140.0,  96.0], [119.26683754697535, 34.998793786159396]),
+        ([128.0, 110.0], [119.99903258857609, 35.701359024310484]),
+        ([100.0,  80.0], [121.6876341898131, 34.195426218421524]),
+        ([160.0, 120.0], [118.00941467412906, 36.195006973218405]),
+    ]
+        world = pixel_to_world(wcs, pix)
+        @test world ≈ world_ref atol=1e-10
+        @test world_to_pixel(wcs, world_ref) ≈ pix atol=1e-8
+    end
+end
