@@ -135,7 +135,6 @@ function intermediate_to_native(sin_proj::SIN, x::Real, y::Real)
     T = _promote_float_type(x, y)
     xi  = T(sin_proj.xi)
     eta = T(sin_proj.eta)
-    oneT = one(T)
 
     # Convert x, y to radians (projection formulas use dimensionless coords)
     xr = deg2rad(x)
@@ -147,18 +146,18 @@ function intermediate_to_native(sin_proj::SIN, x::Real, y::Real)
 
     if iszero(xi) && iszero(eta)
         # Standard SIN: R_θ = cos(θ)  (in unit sphere coords)
-        if r > oneT
+        if r > 1
             error("SIN projection: point outside valid domain (R_θ = $(r) > 1)")
         end
         theta = acos(r)   # θ = acos(R_θ)
         phi = atan(xr, -yr)
     else
         # Slant SIN: solve quadratic (Paper II, Eq. 49)
-        a = xi^2 + eta^2 + oneT
+        a = xi^2 + eta^2 + 1
         b = xi*(xr - xi) + eta*(yr - eta)
-        c = (xr - xi)^2 + (yr - eta)^2 - oneT
+        c = (xr - xi)^2 + (yr - eta)^2 - 1
         disc = b^2 - a*c
-        if disc < zero(T)
+        if disc < 0
             error("SIN projection: point outside valid domain (discriminant < 0)")
         end
         sth1 = (-b + sqrt(disc)) / a
@@ -166,11 +165,11 @@ function intermediate_to_native(sin_proj::SIN, x::Real, y::Real)
         # Choose the solution with θ ≥ θ_0 = 0° (i.e., sin(θ) ≥ 0 preferred)
         # For the standard convention, take the larger sin(θ) value.
         sth = sth1 >= sth2 ? sth1 : sth2
-        if abs(sth) > oneT
-            sth = clamp(sth, -oneT, oneT)
+        if abs(sth) > 1
+            sth = clamp(sth, -one(T), one(T))
         end
         theta = asin(sth)
-        offset = oneT - sth
+        offset = 1 - sth
         phi = atan(xr - xi*offset, -(yr - eta*offset))
     end
     return phi, theta
