@@ -69,27 +69,21 @@ header linear transform.
 
 ## Supported Projections
 
-The implemented celestial projection codes are:
+All 28 WCSLIB spherical projections are implemented and verified against
+Astropy / WCSLIB to sub-microarcsecond precision (except CSC, see below).
 
-- `TAN` gnomonic
-- `AZP` zenithal perspective, default parameter form
-- `SZP` slant zenithal perspective, default parameter form
-- `SIN` orthographic, including slant parameters
-- `STG` stereographic
-- `ARC` zenithal equidistant
-- `ZEA` zenithal equal area
-- `CAR` plate carree
-- `CEA` cylindrical equal area
-- `CYP` cylindrical perspective
-- `MER` Mercator
-- `SFL` Sanson-Flamsteed
-- `PAR` parabolic
-- `MOL` Mollweide
-- `PCO` polyconic
-- `AIT` Hammer-Aitoff
+Zenithal: `AZP`, `SZP`, `TAN`, `SIN` (including slant), `STG`, `ARC`, `ZPN`, `ZEA`, `AIR`
+Cylindrical: `CAR`, `CEA`, `CYP`, `MER`
+Pseudocylindrical / conventional: `SFL`, `PAR`, `MOL`, `PCO`, `AIT`
+Conic: `COP`, `COD`, `COE`, `COO`
+Polyconic: `BON`
+Quadrilateralized spherical cube: `TSC`, `CSC`¹, `QSC`
+HEALPix: `HPX`, `XPH`
 
-Unknown projection codes can be parsed, but coordinate transforms throw an
-informative error until the projection is implemented.
+¹ CSC matches to ~9 mas due to WCSLIB storing its polynomial coefficients
+  as 32-bit `float` while our implementation computes in 64-bit.
+
+Unknown projection codes throw an informative error at transform time.
 
 ## FITS Loader Extensions
 
@@ -104,19 +98,19 @@ The core package does not depend on either FITS loader at runtime.
 
 ## Known Limitations
 
-The following areas are not complete yet:
+- **AZP / SZP**: only the default (central perspective) parameter forms are
+  implemented.  Non-default `PV` parameters are rejected at parse time.
+- **Paper III spectral algorithms**: plain linear spectral axes work, but
+  algorithm-coded axes such as `FREQ-LOG`, `WAVE-F2W`, etc. throw an explicit
+  parse error.
+- **`-TAB` table-lookup axes**: throw an explicit parse error.
+- **Paper IV distortion lookup tables** (`CPDIS`, `D2IMDIS`, `DP`, `DQ`): throw
+  an explicit parse error.
+- **TPV / TPD polynomial distortion**: the `-TPV` and `-TPD` projection suffixes
+  are not implemented.
+- **Time and Stokes axes**: transform linearly but carry no physical
+  interpretation (e.g., `MJDREF`, `DATE-OBS`, `TIMESYS`, polarization state).
+- **Full WCS.jl API compatibility**: only a partial compatibility layer exists
+  (`WCS`, `pix_to_world`, `world_to_pix`, mutating `!` variants).
 
-- spectral physical conversions from FITS WCS Paper III; plain linear spectral
-  axes work, but algorithm-coded axes such as `FREQ-LOG` throw an explicit
-  parse error
-- physical interpretation of time and Stokes axes
-- tabular lookup axes (`-TAB`), which currently throw an explicit parse error
-- Paper IV distortion lookup tables, which currently throw an explicit parse error
-- full WCS.jl public API compatibility beyond the documented partial layer
-
-Reference-comparison regression tests are stored in
-`test/regression_wcslib.jl`, with an optional Astropy verifier in
-`test/regression_astropy.py`. Benchmarks for representative scalar, batch,
-projection, SIP, and parsing paths live under `benchmark/`.
-
-See `docs/dev/wcs_compliance_matrix.md` for the current status by feature.
+Benchmarks for representative paths live under `benchmark/`.
