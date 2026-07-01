@@ -305,6 +305,36 @@ Calabretta & Roukema (2007).
 """
 struct XPH <: AbstractProjection end
 
+# ── TPV / TPD ──────────────────────────────────────────────────────────────────
+
+"""    TPV
+
+TAN projection with sequent polynomial distortion (SCAMP convention).
+
+TPV is not a fundamental projection; it is a TAN (gnomonic) projection combined
+with a sequent polynomial distortion whose coefficients are stored in FITS
+`PVi_m` keywords.  The polynomial operates on intermediate world coordinates
+(x, y) in degrees **after** the CD matrix, using the TPD coefficient indexing
+convention.
+
+Coefficients are stored in **direct** form (wcslib convention): the polynomial
+returns the corrected coordinate directly.  The identity polynomial is
+``xcoeff = [0, 1]`` (i.e. ``x' = x``) and ``ycoeff = [0, 0, 1]`` (``y' = y``).
+
+The CTYPE projection codes `TPV` and `TPD` both map to this type.
+
+# Fields
+- `xcoeff` – ``PV_{lon\\_axis,m}`` coefficients (direct form)
+- `ycoeff` – ``PV_{lat\\_axis,m}`` coefficients (direct form)
+"""
+struct TPV <: AbstractProjection
+    xcoeff::Vector{Float64}
+    ycoeff::Vector{Float64}
+end
+
+# Default is identity polynomial (= plain TAN).  x' = 1·x, y' = 1·y.
+TPV() = TPV(Float64[0.0, 1.0], Float64[0.0, 0.0, 1.0])
+
 # ── Unknown / deferred ────────────────────────────────────────────────────────
 
 """    UnknownProjection
