@@ -62,6 +62,8 @@ function celestial_to_native(alpha::Real, delta::Real,
     # Paper II, Eq. 5
     theta = asin(clamp(sin_de * sin_dp + cos_de * cos_dp * cos_da, -1.0, 1.0))
     phi   = phi_p + atan(-cos_de * sin_da, sin_de * cos_dp - cos_de * sin_dp * cos_da)
+    # Normalise phi to [-π, π] (WCSLIB convention).
+    phi = mod(phi + π, 2π) - π
     return phi, theta
 end
 
