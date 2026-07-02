@@ -16,7 +16,7 @@ References reviewed:
 
 Decisions made:
 
-- Keep `from_header` dictionary-first and front-end agnostic.
+- Keep `WCS` dictionary-first and front-end agnostic.
 - Infer `WCSAXES` from indexed WCS keywords when `WCSAXES` is absent but `NAXIS` is present, matching Paper I.
 - Preserve the existing explicit-error behavior when both `NAXIS` and `WCSAXES` are missing from the simple dictionary input.
 - Use Paper I defaults for core WCS keywords, including `CRPIXi = 0.0`.
@@ -196,7 +196,7 @@ Decisions made:
 - Add `WCSTransform(naxis; kwds...)` as a compatibility constructor for core
   WCS vectors and matrices.
 - Translate supported constructor keywords into ordinary FITS header keys and
-  call `from_header`, so validation, projection setup, SIP rejection, and unit
+  call `WCS`, so validation, projection setup, SIP rejection, and unit
   handling remain owned by the parser.
 - Reject specialized wcslib fields such as `restfrq` for now instead of
   accepting metadata that FITSWCS would not yet use.
@@ -239,7 +239,7 @@ References reviewed:
 Decisions made:
 
 - Keep full Paper III `-TAB` lookup support deferred.
-- Reject any parsed `CTYPEia` algorithm code of `TAB` during `from_header`, so
+- Reject any parsed `CTYPEia` algorithm code of `TAB` during `WCS` construction, so
   unsupported lookup coordinates are not silently treated as ordinary linear
   axes.
 - Apply the same check to alternate WCS descriptions selected with `alt`.
@@ -247,7 +247,7 @@ Decisions made:
 Result:
 
 - Added parser tests for `FREQ-TAB` recognition and primary/alternate
-  `from_header` rejection.
+  `WCS` rejection.
 
 ## 2026-06-15: Explicit Paper IV Lookup-Distortion Deferral
 
@@ -294,7 +294,7 @@ Decisions made:
 Result:
 
 - Added parser tests for spectral algorithm recognition and primary/alternate
-  `from_header` rejection.
+  `WCS` rejection.
 
 ## 2026-06-15: Split Celestial/Spectral Reference Fixtures
 

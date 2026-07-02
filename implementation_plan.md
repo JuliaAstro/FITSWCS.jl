@@ -81,12 +81,6 @@ Minimize dependencies. Before adding any dependency, evaluate:
 * Can the needed functionality be implemented cleanly in a few lines?
 * Would vendoring or local implementation be clearer?
 
-Expected acceptable dependencies may include:
-
-* `LinearAlgebra` from the standard library.
-* `Test` for testing.
-* Possibly `StaticArrays.jl` only if there is a demonstrated performance or clarity benefit, but avoid it initially unless needed.
-
 Avoid large dependencies for small utilities.
 
 ---
@@ -632,6 +626,18 @@ Implementation notes:
 
 * Represent `CPDIS1/2`, `D2IMDIS1/2`, `DP*`, `DQ*`, and related lookup-table
   metadata explicitly instead of rejecting them.
+* Treat full Paper IV `DP`/`DQ` support as broader than lookup-table support.
+  `DPja` and `DQia` are parameter-record families for prior and sequent
+  distortions, not just image-extension lookup metadata.  Supporting non-lookup
+  values such as `CPDISja = 'TPD'`, `CQDISia = 'TPD'`, `SIP`, `TPV`, `DSS`, or
+  general polynomial translations requires parsing field-specifier records
+  (`NAXES`, `AXIS`, `OFFSET`, `SCALE`, `DOCORR`, `TPD.FWD.*`, `TPD.REV.*`,
+  etc.), representing prior and sequent polynomial distortions separately,
+  evaluating the TPD/general polynomial basis, and implementing inverse
+  handling using reverse coefficients or iterative solves.  Astropy's high-level
+  Paper IV pipeline only materializes `LOOKUP` distortions and warns that
+  polynomial distortion is not implemented, so these cases should be tested
+  against wcslib/WCS.jl behavior rather than Astropy.
 * Add image/table HDU readers through existing FITSIO.jl and FITSFiles.jl
   extensions.
 * Extend the public parsing API beyond header-only inputs.  Astropy requires
@@ -639,7 +645,7 @@ Implementation notes:
   header keywords only identify auxiliary image extensions such as `WCSDVARR`
   and `D2IMARR`; the array payloads must be read from the FITS HDUList.  A
   FITSWCS API needs an equivalent way to pass the owning HDU list or a lookup
-  resolver into `from_header`.
+  resolver into `WCS`.
 * Preserve the distinction Astropy exposes between the full pipeline and the
   core wcslib transform: `all_pix2world` / `all_world2pix` apply detector
   lookup tables, SIP, Paper IV lookup tables, and then the core WCS, while
@@ -702,10 +708,9 @@ would need to:
 * Implement linear interpolation between table entries for pixel→world and
   an iterative inversion (or use an inverse index array) for world→pixel.
 * This couples the WCS parser to the file loader in a way the current
-  dictionary-first design intentionally avoids.  Supporting `-TAB` would
-  require either a breaking API change to `from_header` (to pass a file
-  handle or HDU list) or a deferred resolution pattern where the table is
-  resolved later.
+  dictionary-first design intentionally avoids.  Supporting `-TAB` requires
+  extending `WCS` with an auxiliary file/HDU-list input, or a deferred
+  resolution pattern where the table is resolved later.
 
 **3. Velocity conversions.**  The `VRAD`, `VOPT`, `ZOPT`, `VELO`, `BETA`
 coordinate types all represent recessional velocity / redshift, differing in
@@ -792,6 +797,23 @@ Implementation notes:
 * Add `find_all_wcs` over primary and alternate WCS suffixes.
 * Add validation and optional fixups analogous to `cdfix`, `unitfix`,
   `datfix`, `spcfix`, and `cylfix`, keeping automatic mutation opt-in.
+* Add a small `relax`/`reject` policy layer for header parsing.  WCSLIB's
+  `wcspih` accepts bit flags that control non-standard or legacy keyword forms
+  (`CROTAia`, old `CD00i00j`/`PC00i00j`, `PV0i_0ma`, `PS0i_0ma`, `RADECSYS`,
+  long-key variants, auxiliary image WCS keywords, etc.) and reports how many
+  WCS descriptions were rejected.  FITSWCS should expose a simpler Julia API
+  such as `WCS(header; relax=:standard|:all|Set(...),
+  ignore_rejected=false)` rather than copying the raw integer bitmask directly.
+  Internally, route keyword-family acceptance through parser policy predicates
+  and return or throw structured parse diagnostics for rejected alternates.
+* Add an `obsfix`-style helper only after observatory/time metadata are stored.
+  WCSLIB's `obsfix(ctrl, wcs)` completes or validates the six-element
+  observatory position metadata by converting between geocentric `(x,y,z)` and
+  geodetic `(longitude, latitude, height)` triplets.  In FITSWCS this should
+  live outside the core pixel transform path, e.g. `obsfix(wcs; mode=:fill)` or
+  `normalize_observer!(wcs.metadata; mode=:fill|:reset|:check)`, and should be
+  tested independently against WCSLIB/Astropy values.  It is not needed for
+  ordinary image WCS transforms.
 
 ### Task H: Add WCS Subsetting, Slicing, And Comparison
 

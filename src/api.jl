@@ -6,16 +6,6 @@ These names mirror common WCS.jl workflows, but keep FITSWCS.jl's FITS
 """
 
 """
-    WCS(header; alt=' ') -> WCSTransform
-
-Construct a `WCSTransform` from a FITS-like header object.
-"""
-function WCS(header; alt::Char=' ')
-    # Keep construction behavior centralized in the header parser.
-    return from_header(header; alt=alt)
-end
-
-"""
     WCSTransform(naxis; kwds...) -> WCSTransform
 
 Construct a transform from WCS.jl-style keyword vectors and matrices.
@@ -34,7 +24,7 @@ function WCSTransform(naxis::Integer; kwds...)
     end
 
     # Reuse the main parser so validation and projection setup stay centralized.
-    return from_header(header)
+    return WCS(header)
 end
 
 function _constructor_keyword_to_header!(header::Dict{String,Any},

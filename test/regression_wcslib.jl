@@ -32,7 +32,7 @@ using FITSWCS
         "CRVAL1" => 83.8221,     "CRVAL2" => -5.3911,
         "CDELT1" => -2.7778e-4,  "CDELT2" =>  2.7778e-4,
     )
-    wcs = from_header(hdr)
+    wcs = WCS(hdr)
 
     # Reference pixel maps to CRVAL
     w = pixel_to_world(wcs, [512.0, 512.0])
@@ -84,7 +84,7 @@ end
         "PC1_1"  => cos(rho),     "PC1_2"  => -sin(rho),
         "PC2_1"  => sin(rho),     "PC2_2"  =>  cos(rho),
     )
-    wcs = from_header(hdr)
+    wcs = WCS(hdr)
 
     # Reference pixel
     w = pixel_to_world(wcs, [256.0, 256.0])
@@ -125,7 +125,7 @@ end
         "CD1_1"  => -scale * cos(theta),  "CD1_2" => -scale * sin(theta),
         "CD2_1"  => -scale * sin(theta),  "CD2_2" =>  scale * cos(theta),
     )
-    wcs = from_header(hdr)
+    wcs = WCS(hdr)
 
     # Reference pixel
     w = pixel_to_world(wcs, [2048.0, 1024.0])
@@ -161,7 +161,7 @@ end
         "CRVAL1" => 0.0,         "CRVAL2" => 0.0,
         "CDELT1" => -0.5,        "CDELT2" => 0.5,
     )
-    wcs = from_header(hdr)
+    wcs = WCS(hdr)
 
     # Center
     w = pixel_to_world(wcs, [360.5, 180.5])
@@ -202,7 +202,7 @@ end
         "CRVAL1" => 180.0,       "CRVAL2" => 30.0,
         "CDELT1" => -0.01,       "CDELT2" => 0.01,
     )
-    wcs = from_header(hdr)
+    wcs = WCS(hdr)
 
     # Reference pixel
     w = pixel_to_world(wcs, [100.0, 100.0])
@@ -238,7 +238,7 @@ end
         "CRVAL1" => 0.0,         "CRVAL2" => 0.0,
         "CDELT1" => -1.0,        "CDELT2" => 1.0,
     )
-    wcs = from_header(hdr)
+    wcs = WCS(hdr)
 
     # Reference pixel
     w = pixel_to_world(wcs, [181.0, 91.0])
@@ -274,7 +274,7 @@ end
         "CRVAL1" => 270.0,       "CRVAL2" => -45.0,
         "CDELT1" => -0.1,        "CDELT2" => 0.1,
     )
-    wcs = from_header(hdr)
+    wcs = WCS(hdr)
 
     # Reference pixel
     w = pixel_to_world(wcs, [64.0, 64.0])
@@ -311,7 +311,7 @@ end
         "CRVAL1" => 10.0,        "CRVAL2" => 25.0,          "CRVAL3" => 1.42e9,
         "CDELT1" => -0.01,       "CDELT2" =>  0.01,         "CDELT3" => 1.0e6,
     )
-    wcs = from_header(hdr)
+    wcs = WCS(hdr)
 
     # Reference pixel
     w = pixel_to_world(wcs, [50.0, 50.0, 1.0])
@@ -353,7 +353,7 @@ end
         "B_ORDER" => 2,
         "B_2_0"   => 1.0e-6,           "B_0_2"   => 0.0,      "B_1_1" => 3.0e-6,
     )
-    wcs = from_header(hdr)
+    wcs = WCS(hdr)
 
     # Reference pixel maps to CRVAL
     w = pixel_to_world(wcs, [512.0, 512.0])
@@ -386,7 +386,7 @@ end
         "CRVAL1" => 150.0,       "CRVAL2" => 2.5,
         "CDELT1" => -2.7778e-4,  "CDELT2" =>  2.7778e-4,
     )
-    wcs_nosip = from_header(hdr_nosip)
+    wcs_nosip = WCS(hdr_nosip)
     # At the reference pixel SIP adds zero distortion, so results match
     @test pixel_to_world(wcs, [512.0, 512.0]) ≈ pixel_to_world(wcs_nosip, [512.0, 512.0])  atol=1e-10
     # Off-center the SIP result must differ from the non-SIP result
