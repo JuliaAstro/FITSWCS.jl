@@ -1,8 +1,9 @@
 # FITSWCS.jl
 
 FITSWCS.jl is a pure-Julia implementation of core FITS World Coordinate System
-transforms.  It is intentionally dictionary-first and FITS-loader agnostic:
-FITSIO.jl and FITSFiles.jl support is provided through package extensions.
+transforms.  It is intentionally dictionary-first: the main parser works with
+FITS-like header dictionaries, while FITSIO.jl and FITSFiles.jl inputs are
+adapted through package extensions.
 
 This package is still under active development.  It currently focuses on
 correct, maintainable coverage of common image WCS cases rather than full
@@ -58,10 +59,14 @@ The parser currently supports these image-WCS keyword families:
 - linear transforms: `PCi_ja`, `CDi_ja`, and legacy `CROTA2`
 - alternate WCS suffixes through `from_header(header; alt='A')`
 - celestial pole keywords: `LONPOLE`, `LATPOLE`
-- projection parameters used by implemented projections:
-  `PV<lat>_1` and `PV<lat>_2`
+- projection parameters used by implemented projections, including:
+  `PV<lat>_1`, `PV<lat>_2`, `PV<lat>_3`, `PV<lat>_0..30` for `ZPN`, and
+  `PV<axis>_0..59` coefficients for `TPV` / `TPD`
 - SIP distortion: `A_ORDER`, `B_ORDER`, `A_i_j`, `B_i_j`,
   `AP_ORDER`, `BP_ORDER`, `AP_i_j`, `BP_i_j`
+- pre-2012 SCAMP TPV compatibility: `-TAN` celestial CTYPEs with high-index
+  `PV` coefficients are interpreted as `-TPV`, and `TPV` / `TPD` take
+  precedence over SIP when both are present
 
 Celestial units are normalized to degrees at the public API boundary.  Linear,
 spectral, time, and Stokes axes currently remain in the units encoded by their
@@ -69,8 +74,10 @@ header linear transform.
 
 ## Supported Projections
 
-All 28 WCSLIB spherical projections are implemented and verified against
-Astropy / WCSLIB to sub-microarcsecond precision (except CSC, see below).
+All 28 WCSLIB spherical projections are implemented and checked against stored
+Astropy / WCSLIB fixtures to sub-microarcsecond precision in the tested
+regions, except CSC as noted below.  FITSWCS.jl also implements `TPV` / `TPD`
+as TAN plus sequent polynomial distortion.
 
 Zenithal: `AZP`, `SZP`, `TAN`, `SIN` (including slant), `STG`, `ARC`, `ZPN`, `ZEA`, `AIR`
 Cylindrical: `CAR`, `CEA`, `CYP`, `MER`
@@ -79,6 +86,7 @@ Conic: `COP`, `COD`, `COE`, `COO`
 Polyconic: `BON`
 Quadrilateralized spherical cube: `TSC`, `CSC`¹, `QSC`
 HEALPix: `HPX`, `XPH`
+Distorted tangent plane: `TPV`, `TPD`
 
 ¹ CSC matches to ~9 mas due to WCSLIB storing its polynomial coefficients
   as 32-bit `float` while our implementation computes in 64-bit.
@@ -94,20 +102,20 @@ When the corresponding package is loaded, `from_header` accepts:
 - `FITSFiles.Card` vectors
 - `FITSFiles.HDU`
 
-The core package does not depend on either FITS loader at runtime.
+FITSFiles.jl is currently a regular package dependency, while FITSIO.jl is a
+weak dependency; both loader-specific methods are still isolated in extensions.
 
 ## Known Limitations
 
-- **AZP / SZP**: only the default (central perspective) parameter forms are
-  implemented.  Non-default `PV` parameters are rejected at parse time.
 - **Paper III spectral algorithms**: plain linear spectral axes work, but
   algorithm-coded axes such as `FREQ-LOG`, `WAVE-F2W`, etc. throw an explicit
   parse error.
 - **`-TAB` table-lookup axes**: throw an explicit parse error.
-- **Paper IV distortion lookup tables** (`CPDIS`, `D2IMDIS`, `DP`, `DQ`): throw
-  an explicit parse error.
-- **TPV / TPD polynomial distortion**: the `-TPV` and `-TPD` projection suffixes
-  are not implemented.
+- **Paper IV distortion lookup tables** (`CPDIS`, `D2IMDIS`, `D2IMERR`,
+  `AXISCORR`, `DP`, `DQ`): throw an explicit parse error.
+- **Iterative inverse distortions**: SIP without inverse `AP` / `BP`
+  coefficients, and non-trivial `TPV` / `TPD`, use iterative inverses that
+  warn and return the best estimate if they fail to converge.
 - **Time and Stokes axes**: transform linearly but carry no physical
   interpretation (e.g., `MJDREF`, `DATE-OBS`, `TIMESYS`, polarization state).
 - **Full WCS.jl API compatibility**: only a partial compatibility layer exists
