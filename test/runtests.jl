@@ -1606,11 +1606,35 @@ end
             @test hdu_fobj_wcs.aux isa NoAuxiliaryWCSData
 
             lookup_header = FITSIO.FITSHeader(
-                ["NAXIS", "CTYPE1", "CRPIX1", "CRVAL1", "CDELT1", "CPDIS1"],
-                [1, "FREQ", 1.0, 100.0, 2.0, "LOOKUP"],
+                [
+                    "NAXIS", "CTYPE1", "CTYPE2",
+                    "CRPIX1", "CRPIX2", "CRVAL1", "CRVAL2", "CDELT1", "CDELT2",
+                    "CPDIS1", "DP1.EXTVER", "DP1.AXIS.1",
+                    "D2IMDIS2", "D2IM2.EXTVER", "D2IM2.AXIS.2",
+                ],
+                [
+                    2, "X", "Y",
+                    1.0, 1.0, 0.0, 0.0, 1.0, 1.0,
+                    "LOOKUP", 1, 1,
+                    "LOOKUP", 2, 2,
+                ],
+                fill("", 15),
+            )
+            table_header = FITSIO.FITSHeader(
+                ["CRPIX1", "CRPIX2", "CRVAL1", "CRVAL2", "CDELT1", "CDELT2"],
+                [0.0, 0.0, 0.0, 0.0, 1.0, 1.0],
                 fill("", 6),
             )
-            @test_throws ArgumentError WCS(lookup_header; fobj=file)
+            FITSIO.write(file, fill(Float32(0.5), 2, 2); header=table_header, name="WCSDVARR", ver=1)
+            FITSIO.write(file, fill(Float32(0.25), 2, 2); header=table_header, name="D2IMARR", ver=2)
+
+            lookup_wcs = WCS(lookup_header; fobj=file)
+            @test lookup_wcs.aux isa AuxiliaryWCSData
+            @test lookup_wcs.aux.cpdis[1] isa LookupTable2D
+            @test lookup_wcs.aux.det2im[2] isa LookupTable2D
+            @test pixel_to_world(lookup_wcs, [1.0, 1.0]) ≈ [0.5, 0.25]
+            @test_throws ArgumentError world_to_pixel(lookup_wcs, [0.5, 0.25])
+            @test_throws ArgumentError world_to_pixel(lookup_wcs, reshape([0.5, 0.25], 2, 1))
         end
     end
 end
@@ -1647,15 +1671,58 @@ end
     lookup_cards = FITSFiles.Card[
         FITSFiles.Card("SIMPLE", true),
         FITSFiles.Card("BITPIX", -32),
-        FITSFiles.Card("NAXIS", 1),
+        FITSFiles.Card("NAXIS", 2),
         FITSFiles.Card("NAXIS1", 4),
-        FITSFiles.Card("CTYPE1", "FREQ"),
+        FITSFiles.Card("NAXIS2", 4),
+        FITSFiles.Card("CTYPE1", "X"),
+        FITSFiles.Card("CTYPE2", "Y"),
         FITSFiles.Card("CRPIX1", 1.0),
-        FITSFiles.Card("CRVAL1", 100.0),
-        FITSFiles.Card("CDELT1", 2.0),
+        FITSFiles.Card("CRPIX2", 1.0),
+        FITSFiles.Card("CRVAL1", 0.0),
+        FITSFiles.Card("CRVAL2", 0.0),
+        FITSFiles.Card("CDELT1", 1.0),
+        FITSFiles.Card("CDELT2", 1.0),
         FITSFiles.Card("CPDIS1", "LOOKUP"),
+        FITSFiles.Card("HIERARCH", "DP1.EXTVER", 1, ""),
+        FITSFiles.Card("HIERARCH", "DP1.AXIS.1", 1, ""),
+        FITSFiles.Card("D2IMDIS2", "LOOKUP"),
+        FITSFiles.Card("HIERARCH", "D2IM2.EXTVER", 2, ""),
+        FITSFiles.Card("HIERARCH", "D2IM2.AXIS.2", 2, ""),
     ]
-    @test_throws ArgumentError WCS(lookup_cards; fobj=hdus)
+    lookup_hdu = FITSFiles.HDU(lookup_cards)
+    table_cards_1 = FITSFiles.Card[
+        FITSFiles.Card("EXTNAME", "WCSDVARR"),
+        FITSFiles.Card("EXTVER", 1),
+        FITSFiles.Card("CRPIX1", 0.0),
+        FITSFiles.Card("CRPIX2", 0.0),
+        FITSFiles.Card("CRVAL1", 0.0),
+        FITSFiles.Card("CRVAL2", 0.0),
+        FITSFiles.Card("CDELT1", 1.0),
+        FITSFiles.Card("CDELT2", 1.0),
+    ]
+    table_cards_2 = FITSFiles.Card[
+        FITSFiles.Card("EXTNAME", "D2IMARR"),
+        FITSFiles.Card("EXTVER", 2),
+        FITSFiles.Card("CRPIX1", 0.0),
+        FITSFiles.Card("CRPIX2", 0.0),
+        FITSFiles.Card("CRVAL1", 0.0),
+        FITSFiles.Card("CRVAL2", 0.0),
+        FITSFiles.Card("CDELT1", 1.0),
+        FITSFiles.Card("CDELT2", 1.0),
+    ]
+    lookup_hdus = [
+        lookup_hdu,
+        FITSFiles.HDU(FITSFiles.Image, fill(Float32(0.5), 2, 2), table_cards_1),
+        FITSFiles.HDU(FITSFiles.Image, fill(Float32(0.25), 2, 2), table_cards_2),
+    ]
+
+    lookup_wcs = WCS(lookup_hdu; fobj=lookup_hdus)
+    @test lookup_wcs.aux isa AuxiliaryWCSData
+    @test lookup_wcs.aux.cpdis[1] isa LookupTable2D
+    @test lookup_wcs.aux.det2im[2] isa LookupTable2D
+    @test pixel_to_world(lookup_wcs, [1.0, 1.0]) ≈ [0.5, 0.25]
+    @test_throws ArgumentError world_to_pixel(lookup_wcs, [0.5, 0.25])
+    @test_throws ArgumentError world_to_pixel(lookup_wcs, reshape([0.5, 0.25], 2, 1))
 end
 
 # ──────────────────────────────────────────────────────────────────────────────

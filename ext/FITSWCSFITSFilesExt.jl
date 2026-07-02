@@ -5,7 +5,9 @@ import FITSWCS:
     WCS,
     NoAuxiliaryWCSData,
     _auxiliary_wcs_data,
-    _header_references_external_wcs_data
+    _header_references_external_wcs_data,
+    _lookup_table_from_image,
+    _paper_iv_auxiliary_data
 
 function _fitsfiles_cards_dict(cards::FITSFiles.Cards)
     # Copy card keyword/value pairs into the dictionary shape used by core parsing.
@@ -22,12 +24,24 @@ function _fitsfiles_auxiliary_wcs_data(header::AbstractDict, fobj; alt::Char = '
     # Keep the common header-only path cheap even when a FITSFiles object is supplied.
     _header_references_external_wcs_data(header, alt_str) || return NoAuxiliaryWCSData()
 
-    # Methods for specific fobj types below; if none match, throw an error.
-    throw(
-        ArgumentError(
-            "FITSFiles auxiliary WCS data resolution is not implemented yet for fobj type $(typeof(fobj))"
-        )
+    # Load referenced Paper IV image HDUs and copy them into backend-neutral tables.
+    return _paper_iv_auxiliary_data(
+        header, spec -> begin
+            hdu = _fitsfiles_lookup_hdu(fobj, spec.extname, spec.extver)
+            _lookup_table_from_image(hdu.data, _fitsfiles_cards_dict(hdu.cards), spec.transpose)
+        end; alt = alt, minerr = minerr
     )
+end
+
+function _fitsfiles_lookup_hdu(hdus::AbstractVector{<:FITSFiles.HDU}, extname::AbstractString, extver::Integer)
+    # FITSFiles indexes by EXTNAME only, so scan manually to respect EXTVER.
+    for hdu in hdus
+        cards = hdu.cards
+        haskey(cards, "EXTNAME") || continue
+        uppercase(rstrip(String(cards["EXTNAME"]))) == uppercase(String(extname)) || continue
+        Int(get(cards, "EXTVER", 1)) == Int(extver) && return hdu
+    end
+    throw(KeyError((String(extname), Int(extver))))
 end
 
 function _auxiliary_wcs_data(header::AbstractDict, fobj::AbstractVector{<:FITSFiles.HDU}; alt::Char = ' ', minerr::Real = 0.0)

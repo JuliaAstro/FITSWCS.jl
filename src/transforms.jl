@@ -31,22 +31,22 @@ header specifies via `CDELT` and `CRVAL`.
 # Single-coordinate transforms
 # ──────────────────────────────────────────────────────────────────────────────
 
-@inline _coordinate_float_type(::AbstractVector{T}) where {T<:Real} = _float_type(T)
+@inline _coordinate_float_type(::AbstractVector{T}) where {T <: Real} = _float_type(T)
 
 @inline _coordinate_float_type(coords::Tuple{Vararg{Real}}) = _promote_float_type(coords...)
 
 function _coordinate_vector(coords::Tuple{Vararg{Real, N}}) where {N}
     # Preserve tuple precision and length when materializing scalar arguments.
     T = _coordinate_float_type(coords)
-    return SVector{N,T}(coords)
+    return SVector{N, T}(coords)
 end
 
 @inline function _world_from_intermediate(wcs::WCSTransform{N}, intermediate::AbstractVector, ::Type{T}) where {N, T <: AbstractFloat}
-    return SVector{N,T}(ntuple(i -> T(wcs.crval[i]) + T(intermediate[i]), N))
+    return SVector{N, T}(ntuple(i -> T(wcs.crval[i]) + T(intermediate[i]), N))
 end
 
-@inline function _world_offsets(wcs::WCSTransform{N}, world::AbstractVector, ::Type{T}) where {N,T<:AbstractFloat}
-    return SVector{N,T}(ntuple(i -> T(world[i]) - T(wcs.crval[i]), N))
+@inline function _world_offsets(wcs::WCSTransform{N}, world::AbstractVector, ::Type{T}) where {N, T <: AbstractFloat}
+    return SVector{N, T}(ntuple(i -> T(world[i]) - T(wcs.crval[i]), N))
 end
 
 function _set_celestial_axes!(coords::AbstractVector, lon_idx::Int, lat_idx::Int, lon, lat)
@@ -56,9 +56,9 @@ function _set_celestial_axes!(coords::AbstractVector, lon_idx::Int, lat_idx::Int
     return coords
 end
 
-function _set_celestial_axes!(coords::StaticVector{N,T}, lon_idx::Int, lat_idx::Int, lon, lat) where {N,T}
+function _set_celestial_axes!(coords::StaticVector{N, T}, lon_idx::Int, lat_idx::Int, lon, lat) where {N, T}
     # Immutable static coordinates are rebuilt with the celestial axes replaced.
-    return SVector{N,T}(ntuple(i -> i == lon_idx ? T(lon) : i == lat_idx ? T(lat) : coords[i], N))
+    return SVector{N, T}(ntuple(i -> i == lon_idx ? T(lon) : i == lat_idx ? T(lat) : coords[i], N))
 end
 
 """
@@ -177,10 +177,10 @@ world_to_pixel(wcs::WCSTransform, world::Tuple{Vararg{Real}}) =
 # Batch transforms
 # ──────────────────────────────────────────────────────────────────────────────
 
-@inline _typed_matrix(::Type{T}, values::AbstractMatrix{T}) where {T<:AbstractFloat} = values
-@inline _typed_matrix(::Type{T}, values::AbstractMatrix) where {T<:AbstractFloat} = Matrix{T}(values)
+@inline _typed_matrix(::Type{T}, values::AbstractMatrix{T}) where {T <: AbstractFloat} = values
+@inline _typed_matrix(::Type{T}, values::AbstractMatrix) where {T <: AbstractFloat} = Matrix{T}(values)
 
-function _pixel_to_intermediate_batch(wcs::WCSTransform{A}, pixels::AbstractMatrix, ::Type{T}) where {A,T<:AbstractFloat}
+function _pixel_to_intermediate_batch(wcs::WCSTransform{A}, pixels::AbstractMatrix, ::Type{T}) where {A, T <: AbstractFloat}
     _, ncoords = size(pixels)
     if !has_distortion(wcs.pipeline)
         # Apply CD to all pixel coordinates, then fold in the constant CRPIX offset.
@@ -205,7 +205,7 @@ function _pixel_to_intermediate_batch(wcs::WCSTransform{A}, pixels::AbstractMatr
     return Matrix{T}(wcs.cd) * offsets
 end
 
-function _intermediate_to_pixel_batch(wcs::WCSTransform{A}, intermediate::AbstractMatrix, ::Type{T}) where {A,T<:AbstractFloat}
+function _intermediate_to_pixel_batch(wcs::WCSTransform{A}, intermediate::AbstractMatrix, ::Type{T}) where {A, T <: AbstractFloat}
     # Solve the inverse linear transform for all coordinates at once.
     pixels = Matrix{T}(wcs.cd) \ Matrix{T}(intermediate)
     for k in axes(pixels, 2), i in 1:A
@@ -221,18 +221,18 @@ function _intermediate_to_pixel_batch(wcs::WCSTransform{A}, intermediate::Abstra
     return result
 end
 
-function _linear_world_to_pixel_batch(wcs::WCSTransform{A}, worlds::AbstractMatrix, ::Type{T}) where {A,T<:AbstractFloat}
+function _linear_world_to_pixel_batch(wcs::WCSTransform{A}, worlds::AbstractMatrix, ::Type{T}) where {A, T <: AbstractFloat}
     # Solve CD * p = world for all columns, then fold in the CRPIX/CRVAL offset.
     cd = Matrix{T}(wcs.cd)
     pixels = cd \ _typed_matrix(T, worlds)
-    origin = convert(SVector{A,T}, wcs.crpix) - (cd \ convert(SVector{A,T}, wcs.crval))
+    origin = convert(SVector{A, T}, wcs.crpix) - (cd \ convert(SVector{A, T}, wcs.crval))
     for k in axes(pixels, 2), i in 1:A
         pixels[i, k] += origin[i]
     end
     return pixels
 end
 
-function _add_crval_rows!(wcs::WCSTransform{A}, coords::AbstractMatrix, ::Type{T}) where {A,T<:AbstractFloat}
+function _add_crval_rows!(wcs::WCSTransform{A}, coords::AbstractMatrix, ::Type{T}) where {A, T <: AbstractFloat}
     # Add CRVAL by row so all non-celestial axes preserve their header offsets.
     for k in axes(coords, 2), i in 1:A
         coords[i, k] += T(wcs.crval[i])
@@ -240,7 +240,7 @@ function _add_crval_rows!(wcs::WCSTransform{A}, coords::AbstractMatrix, ::Type{T
     return coords
 end
 
-function _world_offsets_batch(wcs::WCSTransform{A}, worlds::AbstractMatrix, ::Type{T}) where {A,T<:AbstractFloat}
+function _world_offsets_batch(wcs::WCSTransform{A}, worlds::AbstractMatrix, ::Type{T}) where {A, T <: AbstractFloat}
     offsets = similar(worlds, T, A, size(worlds, 2))
 
     # Subtract CRVAL by row to form intermediate coordinates for all axes.
@@ -318,7 +318,13 @@ function world_to_pixel(wcs::WCSTransform, worlds::AbstractMatrix)
     T = _float_type(eltype(worlds))
 
     if wcs.projection === nothing
-        # Purely linear WCS can solve all world coordinates directly.
+        if has_distortion(wcs.pipeline)
+            # Distorted linear WCS still needs the per-coordinate inverse pipeline.
+            intermediate = _world_offsets_batch(wcs, worlds, T)
+            return _intermediate_to_pixel_batch(wcs, intermediate, T)
+        end
+
+        # Purely linear, undistorted WCS can solve all world coordinates directly.
         return _linear_world_to_pixel_batch(wcs, worlds, T)
     end
 

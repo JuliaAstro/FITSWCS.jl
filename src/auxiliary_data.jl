@@ -25,8 +25,96 @@ end
 AuxiliaryWCSData(; det2im = (nothing, nothing), cpdis = (nothing, nothing), tabular = nothing) =
     AuxiliaryWCSData(det2im, cpdis, tabular)
 
+struct PaperIVLookupSpec
+    extname::String
+    extver::Int
+    transpose::Bool
+end
+
 has_auxiliary(::NoAuxiliaryWCSData) = false
 has_auxiliary(::AbstractAuxiliaryWCSData) = true
+
+function is_lookup_distortion_keyword(key::AbstractString, alt_str::AbstractString = "")
+    ukey = uppercase(String(key))
+    suffix = uppercase(String(alt_str))
+
+    # Astropy exposes Paper IV lookup tables as CPDIS and detector-to-image D2IM.
+    occursin(Regex("^CPDIS[1-9][0-9]*$(suffix)\$"), ukey) && return true
+    occursin(Regex("^D2IMDIS[1-9][0-9]*$(suffix)\$"), ukey) && return true
+    occursin(Regex("^D2IMERR[1-9][0-9]*$(suffix)\$"), ukey) && return true
+    ukey == "AXISCORR$(suffix)" && return true
+
+    # wcslib Paper IV distortion parameters use DPja/DQia keyword families.
+    occursin(Regex("^D[QP][1-9][0-9]*$(suffix)\\."), ukey) && return true
+
+    return false
+end
+
+function _paper_iv_lookup_spec(
+        header::AbstractDict,
+        axis::Int,
+        dist_prefix::AbstractString,
+        param_prefix::AbstractString,
+        err_prefix::AbstractString,
+        extname::AbstractString,
+        alt_str::AbstractString,
+        minerr::Real,
+    )
+    dist_key = "$(dist_prefix)$(axis)$(alt_str)"
+    haskey(header, dist_key) || return nothing
+    uppercase(String(header[dist_key])) == "LOOKUP" ||
+        throw(ArgumentError("unsupported Paper IV distortion type $(header[dist_key]) in $dist_key"))
+
+    # Skip tables whose declared error is below the requested threshold.
+    err_key = "$(err_prefix)$(axis)$(alt_str)"
+    Float64(get(header, err_key, 0.0)) < Float64(minerr) && return nothing
+
+    param = "$(param_prefix)$(axis)$(alt_str)"
+    axis_key = "$(param).AXIS.$(axis)"
+    haskey(header, axis_key) ||
+        throw(ArgumentError("Paper IV lookup distortion $dist_key requires $axis_key"))
+    table_axis = Int(header[axis_key])
+    table_axis in (1, 2) ||
+        throw(ArgumentError("$axis_key must be 1 or 2, got $table_axis"))
+
+    # Astropy transposes lookup image data when the table axis differs.
+    extver = Int(get(header, "$(param).EXTVER", 1))
+    return PaperIVLookupSpec(String(extname), extver, table_axis != axis)
+end
+
+function _paper_iv_lookup_specs(header::AbstractDict; alt::Char = ' ', minerr::Real = 0.0)
+    alt_str = alt == ' ' ? "" : string(alt)
+
+    # Collect the two Paper IV image lookup families used by Astropy.
+    det2im = ntuple(i -> _paper_iv_lookup_spec(header, i, "D2IMDIS", "D2IM", "D2IMERR", "D2IMARR", alt_str, minerr), 2)
+    cpdis = ntuple(i -> _paper_iv_lookup_spec(header, i, "CPDIS", "DP", "CPERR", "WCSDVARR", alt_str, minerr), 2)
+    return det2im, cpdis
+end
+
+function _lookup_table_from_image(data::AbstractMatrix, header::AbstractDict, transpose::Bool)
+    table_data = transpose ? permutedims(data) : copy(data)
+
+    # Preserve the lookup image's own linear coordinate metadata.
+    return LookupTable2D(
+        table_data;
+        crpix = (get(header, "CRPIX1", 0.0), get(header, "CRPIX2", 0.0)),
+        crval = (get(header, "CRVAL1", 0.0), get(header, "CRVAL2", 0.0)),
+        cdelt = (get(header, "CDELT1", 1.0), get(header, "CDELT2", 1.0)),
+    )
+end
+
+function _paper_iv_auxiliary_data(header::AbstractDict, loader; alt::Char = ' ', minerr::Real = 0.0)
+    det2im_specs, cpdis_specs = _paper_iv_lookup_specs(header; alt = alt, minerr = minerr)
+
+    # Resolve all referenced image arrays through the backend-provided loader.
+    det2im = ntuple(i -> isnothing(det2im_specs[i]) ? nothing : loader(det2im_specs[i]), 2)
+    cpdis = ntuple(i -> isnothing(cpdis_specs[i]) ? nothing : loader(cpdis_specs[i]), 2)
+
+    if all(isnothing, det2im) && all(isnothing, cpdis)
+        return NoAuxiliaryWCSData()
+    end
+    return AuxiliaryWCSData(det2im = det2im, cpdis = cpdis)
+end
 
 function _header_references_tabular_axis(header::AbstractDict, alt_str::AbstractString)
     suffix = uppercase(String(alt_str))

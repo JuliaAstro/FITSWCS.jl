@@ -718,16 +718,13 @@ function WCS(header::AbstractDict; fobj = nothing, alt::Char = ' ', minerr::Real
     projection = isempty(proj_code) ? nothing :
         projection_from_header(proj_code, header, lon_axis, lat_axis, alt)
 
-    # ── Reject unsupported lookup distortions before parsing supported SIP ────
-    reject_lookup_distortion_keywords(header, alt_str)
-
     # ── Parse optional SIP distortion before building transform output ────────
     # TPV/TPD takes precedence over SIP (SCAMP convention).
     if proj_code in ("TPV", "TPD")
         _remove_sip_keywords!(header, alt_str)
     end
     sip = parse_sip_distortion(header, crpix, naxis, alt)
-    pipeline = distortion_pipeline(sip)
+    pipeline = distortion_pipeline(sip, aux)
 
     # ── Build the CD matrix ───────────────────────────────────────────────────
     cd = build_cd_matrix(header, naxis, cdelt, alt)

@@ -46,40 +46,28 @@ end
 DistortionPipeline(sip::SIPDistortion) =
     DistortionPipeline{typeof(sip), Nothing, Nothing}((nothing, nothing), sip, (nothing, nothing))
 
+function distortion_pipeline(sip::Union{Nothing, SIPDistortion}, ::NoAuxiliaryWCSData)
+    # Header-only WCS uses the existing no-op or SIP-only pipeline.
+    return distortion_pipeline(sip)
+end
+
+function distortion_pipeline(sip::Union{Nothing, SIPDistortion}, aux::AuxiliaryWCSData)
+    det2im = aux.det2im isa Tuple && length(aux.det2im) == 2 ? aux.det2im : (nothing, nothing)
+    cpdis = aux.cpdis isa Tuple && length(aux.cpdis) == 2 ? aux.cpdis : (nothing, nothing)
+
+    # Avoid allocating a pipeline for auxiliary payloads that contain only TAB data.
+    if isnothing(sip) && all(isnothing, det2im) && all(isnothing, cpdis)
+        return NoDistortionPipeline()
+    end
+    return DistortionPipeline(det2im, sip, cpdis)
+end
+
 function has_sip_keywords(header::AbstractDict, alt_str::AbstractString)
     # Detect any SIP order keyword for this WCS version.
     for prefix in ("A", "B", "AP", "BP")
         haskey(header, "$(prefix)_ORDER$(alt_str)") && return true
     end
     return false
-end
-
-function is_lookup_distortion_keyword(key::AbstractString, alt_str::AbstractString = "")
-    ukey = uppercase(String(key))
-    suffix = uppercase(String(alt_str))
-
-    # Astropy exposes Paper IV lookup tables as CPDIS and detector-to-image D2IM.
-    occursin(Regex("^CPDIS[1-9][0-9]*$(suffix)\$"), ukey) && return true
-    occursin(Regex("^D2IMDIS[1-9][0-9]*$(suffix)\$"), ukey) && return true
-    occursin(Regex("^D2IMERR[1-9][0-9]*$(suffix)\$"), ukey) && return true
-    ukey == "AXISCORR$(suffix)" && return true
-
-    # wcslib Paper IV distortion parameters use DPja/DQia keyword families.
-    occursin(Regex("^D[QP][1-9][0-9]*$(suffix)\\."), ukey) && return true
-
-    return false
-end
-
-function reject_lookup_distortion_keywords(header::AbstractDict, alt_str::AbstractString = "")
-    # Lookup-table distortions affect only the selected WCS version's pixel pipeline.
-    for key in keys(header)
-        key isa AbstractString || continue
-        if is_lookup_distortion_keyword(key, alt_str)
-            throw(ArgumentError("distortion lookup keyword $key is not implemented yet"))
-        end
-    end
-
-    return nothing
 end
 
 function read_sip_matrix(header::AbstractDict, prefix::AbstractString, order::Int, alt_str::AbstractString)
@@ -142,6 +130,20 @@ distortion_pipeline(sip::SIPDistortion) = DistortionPipeline(sip)
 
 has_distortion(::NoDistortionPipeline) = false
 has_distortion(::DistortionPipeline) = true
+
+function _apply_lookup_stage(tables::Tuple, coord::StaticVector{N, T}) where {N, T}
+    length(tables) == 2 || return coord
+    N >= 2 || return coord
+    x = coord[1]
+    y = coord[2]
+
+    # Paper IV image arrays store additive offsets for each corrected axis.
+    dx = isnothing(tables[1]) ? zero(T) : T(tables[1](x, y))
+    dy = isnothing(tables[2]) ? zero(T) : T(tables[2](x, y))
+    return SVector{N, T}(ntuple(i -> i == 1 ? x + dx : 
+                                     i == 2 ? y + dy :
+                                     coord[i], N))
+end
 
 function evaluate_sip_polynomial(coeff::AbstractMatrix, u::Real, v::Real)
     T = _promote_float_type(u, v)
@@ -237,22 +239,27 @@ function pixel_to_focal(::NoDistortionPipeline, pixel::StaticVector{N}, ::Val{N}
     return pixel
 end
 
-function pixel_to_focal(pipeline::DistortionPipeline, pixel::AbstractVector, ::Val{N}) where {N}
+function pixel_to_focal(pipeline::DistortionPipeline, pixel::AbstractVector, v::Val{N}) where {N}
     length(pixel) == N ||
         throw(DimensionMismatch("pixel has length $(length(pixel)), expected $N"))
 
-    # Preserve identity behavior for future non-SIP pipeline variants.
     T = _coordinate_float_type(pixel)
-    if pipeline.sip === nothing
-        return SVector{N, T}(ntuple(i -> T(pixel[i]), N))
-    end
+    coord = SVector{N, T}(ntuple(i -> T(pixel[i]), N)) # Forward to function below
+    return pixel_to_focal(pipeline, coord, v)
+end
 
-    # Apply the SIP stage; axes outside the two SIP axes pass through unchanged.
-    fx, fy = sip_pixel_to_focal(pipeline.sip, pixel)
-    return SVector{N,T}(ntuple(i ->
-        i == 1 ? T(fx) :
-        i == 2 ? T(fy) :
-        T(pixel[i]), N))
+function pixel_to_focal(pipeline::DistortionPipeline, pixel::StaticVector{N}, ::Val{N}) where {N}
+    T = _coordinate_float_type(pixel)
+
+    # Apply Paper IV detector-to-image, then SIP, then Paper IV pre-linear lookup corrections.
+    coord = _apply_lookup_stage(pipeline.det2im, pixel)
+    if !isnothing(pipeline.sip)
+        fx, fy = sip_pixel_to_focal(pipeline.sip, coord)
+        coord = SVector{N, T}(ntuple(i -> i == 1 ? T(fx) :
+                                          i == 2 ? T(fy) :
+                                          coord[i], N))
+    end
+    return _apply_lookup_stage(pipeline.cpdis, coord)
 end
 
 function focal_to_pixel(::NoDistortionPipeline, focal::AbstractVector, ::Val{N}) where {N}
@@ -269,13 +276,23 @@ function focal_to_pixel(::NoDistortionPipeline, focal::StaticVector{N}, ::Val{N}
     return focal
 end
 
-function focal_to_pixel(pipeline::DistortionPipeline, focal::AbstractVector, ::Val{N}) where {N}
+function focal_to_pixel(pipeline::DistortionPipeline, focal::AbstractVector, v::Val{N}) where {N}
     length(focal) == N ||
         throw(DimensionMismatch("focal coordinate has length $(length(focal)), expected $N"))
 
-    # Preserve identity behavior for future non-SIP pipeline variants.
     T = _coordinate_float_type(focal)
-    if pipeline.sip === nothing
+    coord = SVector{N, T}(ntuple(i -> T(focal[i]), N)) # Forward to function below
+    return focal_to_pixel(pipeline, coord, v)
+end
+
+function focal_to_pixel(pipeline::DistortionPipeline, focal::StaticVector{N}, ::Val{N}) where {N}
+    if any(!isnothing, pipeline.det2im) || any(!isnothing, pipeline.cpdis)
+        throw(ArgumentError("inverse Paper IV lookup distortion is not implemented yet"))
+    end
+
+    # Preserve identity behavior for SIP-free pipeline variants.
+    T = _coordinate_float_type(focal)
+    if isnothing(pipeline.sip)
         return SVector{N, T}(ntuple(i -> T(focal[i]), N))
     end
 
