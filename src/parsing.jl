@@ -665,6 +665,7 @@ function WCS(header::AbstractDict; alt::Char=' ')
         _remove_sip_keywords!(header, alt_str)
     end
     sip = parse_sip_distortion(header, crpix, naxis, alt)
+    pipeline = distortion_pipeline(sip)
 
     # ── Build the CD matrix ───────────────────────────────────────────────────
     cd = build_cd_matrix(header, naxis, cdelt, alt)
@@ -724,6 +725,6 @@ function WCS(header::AbstractDict; alt::Char=' ')
         SMatrix{naxis,naxis,Float64,naxis*naxis}(cd),
         ctype, cunit,
         lonpole, latpole, alpha_p, delta_p,
-        projection, sip, lon_axis, lat_axis,
+        projection, pipeline, lon_axis, lat_axis,
     )
 end
