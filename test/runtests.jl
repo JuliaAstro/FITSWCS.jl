@@ -35,6 +35,19 @@ function FITSWCS._auxiliary_wcs_data(header::AbstractDict, ::FakeAuxiliaryFobj; 
     return AuxiliaryWCSData(det2im=:fake_det2im, cpdis=:fake_cpdis, tabular=:fake_tabular)
 end
 
+"""Fake FITS container that supplies concrete Paper IV lookup tables."""
+struct FakeLookupFobj end
+
+function FITSWCS._auxiliary_wcs_data(header::AbstractDict, ::FakeLookupFobj; alt::Char=' ', minerr::Real=0.0)
+    # Make CPDIS1 depend on the D2IM-corrected y coordinate to test stage ordering.
+    d2im_y = LookupTable2D(fill(0.5, 2, 2); crpix=(1, 1), crval=(1, 1), cdelt=(1, 1))
+    cpdis_x = LookupTable2D([0.0 2.0; 0.0 2.0]; crpix=(1, 1), crval=(1, 1), cdelt=(1, 1))
+    cpdis_y = LookupTable2D(fill(-0.25, 2, 2); crpix=(1, 1), crval=(1, 1), cdelt=(1, 1))
+
+    # Return the same backend-independent payload that real FITS extensions produce.
+    return AuxiliaryWCSData(det2im=(nothing, d2im_y), cpdis=(cpdis_x, cpdis_y))
+end
+
 @testset "FITSWCS" begin
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -1723,6 +1736,30 @@ end
     @test pixel_to_world(lookup_wcs, [1.0, 1.0]) ≈ [0.5, 0.25]
     @test_throws ArgumentError world_to_pixel(lookup_wcs, [0.5, 0.25])
     @test_throws ArgumentError world_to_pixel(lookup_wcs, reshape([0.5, 0.25], 2, 1))
+end
+
+# ──────────────────────────────────────────────────────────────────────────────
+@testset "Paper IV forward distortion pipeline" begin
+    # Loaded D2IM and CPDIS tables should affect scalar and batched pixel-to-world transforms.
+    hdr = Dict(
+        "NAXIS"  => 2,
+        "CTYPE1" => "X", "CTYPE2" => "Y",
+        "CRPIX1" => 1.0, "CRPIX2" => 1.0,
+        "CDELT1" => 1.0, "CDELT2" => 1.0,
+        "CPDIS1" => "LOOKUP", "DP1.AXIS.1" => 1,
+        "D2IMDIS2" => "LOOKUP", "D2IM2.AXIS.2" => 2,
+    )
+
+    wcs = WCS(hdr; fobj=FakeLookupFobj())
+
+    @test wcs.pipeline isa DistortionPipeline
+    @test pixel_to_focal(wcs.pipeline, [1.0, 1.0], Val(2)) ≈ [2.0, 1.25]
+    @test pixel_to_world(wcs, [1.0, 1.0]) ≈ [1.0, 0.25]
+
+    pixels = [1.0 2.0; 1.0 1.0]
+    worlds = pixel_to_world(wcs, pixels)
+    @test worlds[:, 1] ≈ pixel_to_world(wcs, pixels[:, 1])
+    @test worlds[:, 2] ≈ pixel_to_world(wcs, pixels[:, 2])
 end
 
 # ──────────────────────────────────────────────────────────────────────────────

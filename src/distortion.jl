@@ -34,8 +34,9 @@ struct NoDistortionPipeline <: AbstractDistortionPipeline end
 """
     DistortionPipeline
 
-Pre-linear distortion pipeline.  The current implementation uses the `sip`
-field; `det2im` and `cpdis` are reserved for Paper IV lookup-table stages.
+Pre-linear distortion pipeline.  Detector-to-image lookup tables are applied
+before SIP, and CPDIS lookup tables are applied after SIP before the linear WCS
+matrix.
 """
 struct DistortionPipeline{S <: Union{Nothing, SIPDistortion}, D, C} <: AbstractDistortionPipeline
     det2im::NTuple{2, Union{Nothing, D}}
