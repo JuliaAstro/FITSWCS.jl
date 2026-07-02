@@ -1562,6 +1562,19 @@ end
             FITSIO.write(file, zeros(Float32, 4); header=header)
             hdu_wcs = WCS(file[1])
             @test pixel_to_world(hdu_wcs, [3.0]) ≈ [104.0]
+
+            fobj_wcs = WCS(header; fobj=file, minerr=0.1)
+            @test fobj_wcs.aux isa NoAuxiliaryWCSData
+
+            hdu_fobj_wcs = WCS(file[1]; fobj=file, minerr=0.1)
+            @test hdu_fobj_wcs.aux isa NoAuxiliaryWCSData
+
+            lookup_header = FITSIO.FITSHeader(
+                ["NAXIS", "CTYPE1", "CRPIX1", "CRVAL1", "CDELT1", "CPDIS1"],
+                [1, "FREQ", 1.0, 100.0, 2.0, "LOOKUP"],
+                fill("", 6),
+            )
+            @test_throws ArgumentError WCS(lookup_header; fobj=file)
         end
     end
 end
@@ -1586,6 +1599,27 @@ end
     hdu = FITSFiles.HDU(cards)
     hdu_wcs = WCS(hdu)
     @test pixel_to_world(hdu_wcs, [3.0]) ≈ [104.0]
+
+    hdus = [hdu]
+
+    cards_fobj_wcs = WCS(cards; fobj=hdus, minerr=0.1)
+    @test cards_fobj_wcs.aux isa NoAuxiliaryWCSData
+
+    hdu_fobj_wcs = WCS(hdu; fobj=hdus, minerr=0.1)
+    @test hdu_fobj_wcs.aux isa NoAuxiliaryWCSData
+
+    lookup_cards = FITSFiles.Card[
+        FITSFiles.Card("SIMPLE", true),
+        FITSFiles.Card("BITPIX", -32),
+        FITSFiles.Card("NAXIS", 1),
+        FITSFiles.Card("NAXIS1", 4),
+        FITSFiles.Card("CTYPE1", "FREQ"),
+        FITSFiles.Card("CRPIX1", 1.0),
+        FITSFiles.Card("CRVAL1", 100.0),
+        FITSFiles.Card("CDELT1", 2.0),
+        FITSFiles.Card("CPDIS1", "LOOKUP"),
+    ]
+    @test_throws ArgumentError WCS(lookup_cards; fobj=hdus)
 end
 
 # ──────────────────────────────────────────────────────────────────────────────
