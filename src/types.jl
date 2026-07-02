@@ -392,6 +392,28 @@ DistortionPipeline(sip::SIPDistortion) =
 
 # ──────────────────────────────────────────────────────────────────────────────
 
+"""Abstract supertype for backend-independent auxiliary WCS data payloads."""
+abstract type AbstractAuxiliaryWCSData end
+
+"""Auxiliary-data payload for WCS transforms whose headers need no external data."""
+struct NoAuxiliaryWCSData <: AbstractAuxiliaryWCSData end
+
+"""
+    AuxiliaryWCSData
+
+Backend-independent external WCS data resolved at construction time.
+"""
+struct AuxiliaryWCSData{D,C,T} <: AbstractAuxiliaryWCSData
+    det2im::D
+    cpdis::C
+    tabular::T
+end
+
+AuxiliaryWCSData(; det2im=(nothing, nothing), cpdis=(nothing, nothing), tabular=nothing) =
+    AuxiliaryWCSData(det2im, cpdis, tabular)
+
+# ──────────────────────────────────────────────────────────────────────────────
+
 """
     WCSTransform
 
@@ -426,10 +448,11 @@ array indices the values are numerically identical; no offset is required.
 - `projection` – spherical projection for the celestial axes, or `nothing` for
                  purely linear WCS.
 - `pipeline`   – pre-linear pixel/focal-plane distortion pipeline.
+- `aux`        – resolved auxiliary WCS data, or `NoAuxiliaryWCSData`.
 - `lon_axis`   – 1-based index of the longitude axis; 0 if no celestial axes.
 - `lat_axis`   – 1-based index of the latitude axis; 0 if no celestial axes.
 """
-struct WCSTransform{N,L,P<:Union{Nothing,AbstractProjection},D<:AbstractDistortionPipeline}
+struct WCSTransform{N,L,P<:Union{Nothing,AbstractProjection},D<:AbstractDistortionPipeline,A<:AbstractAuxiliaryWCSData}
     naxis::Int
     crpix::SVector{N,Float64}
     crval::SVector{N,Float64}
@@ -442,6 +465,7 @@ struct WCSTransform{N,L,P<:Union{Nothing,AbstractProjection},D<:AbstractDistorti
     delta_p::Float64          # degrees; celestial lat of native N pole
     projection::P
     pipeline::D
+    aux::A
     lon_axis::Int             # 1-based index; 0 = no celestial lon axis
     lat_axis::Int             # 1-based index; 0 = no celestial lat axis
 end

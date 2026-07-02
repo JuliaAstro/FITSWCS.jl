@@ -12,7 +12,9 @@ using FITSWCS: pixel_to_intermediate, intermediate_to_pixel,
                unit_to_deg, build_cd_matrix,
                evaluate_sip_polynomial, sip_pixel_to_focal, sip_focal_to_pixel,
                NoDistortionPipeline, DistortionPipeline,
-               pixel_to_focal, focal_to_pixel, has_distortion
+               pixel_to_focal, focal_to_pixel, has_distortion,
+               NoAuxiliaryWCSData, AuxiliaryWCSData,
+               has_auxiliary, _auxiliary_wcs_data
 
 # Convenience shorthand
 const D2R = π / 180.0
@@ -22,6 +24,14 @@ const R2D = 180.0 / π
 function angle_approx(a::Real, b::Real; atol=1e-12)
     d = mod(a - b + π, 2π) - π   # wrap difference to (-π, π]
     return abs(d) <= atol
+end
+
+"""Fake FITS container used to exercise auxiliary-data resolver dispatch."""
+struct FakeAuxiliaryFobj end
+
+function FITSWCS._auxiliary_wcs_data(header::AbstractDict, ::FakeAuxiliaryFobj; alt::Char=' ', minerr::Real=0.0)
+    # Return a recognizable payload without requiring a real FITS backend.
+    return AuxiliaryWCSData(det2im=:fake_det2im, cpdis=:fake_cpdis, tabular=:fake_tabular)
 end
 
 @testset "FITSWCS" begin
@@ -831,6 +841,36 @@ end
     @test_throws DimensionMismatch WCSTransform(2; crpix=[1.0])
     @test_throws DimensionMismatch WCSTransform(2; pc=ones(3, 3))
     @test_throws ArgumentError WCSTransform(2; restfrq=1.42e9)
+end
+
+# ──────────────────────────────────────────────────────────────────────────────
+@testset "Auxiliary WCS data plumbing" begin
+    # Auxiliary data should be resolved and stored without affecting ordinary headers.
+    hdr = Dict(
+        "NAXIS"  => 2,
+        "CTYPE1" => "X", "CTYPE2" => "Y",
+        "CRPIX1" => 1.0, "CRPIX2" => 1.0,
+        "CDELT1" => 1.0, "CDELT2" => 1.0,
+    )
+
+    plain = WCS(hdr)
+    @test plain.aux isa NoAuxiliaryWCSData
+    @test !has_auxiliary(plain.aux)
+
+    generic_fobj = WCS(hdr; fobj=:unused)
+    @test generic_fobj.aux isa NoAuxiliaryWCSData
+
+    fake = WCS(hdr; fobj=FakeAuxiliaryFobj())
+    @test fake.aux isa AuxiliaryWCSData
+    @test has_auxiliary(fake.aux)
+    @test fake.aux.det2im == :fake_det2im
+    @test fake.aux.cpdis == :fake_cpdis
+    @test fake.aux.tabular == :fake_tabular
+
+    lookup_hdr = copy(hdr)
+    lookup_hdr["CPDIS1"] = "LOOKUP"
+    @test_throws ArgumentError WCS(lookup_hdr)
+    @test_throws ArgumentError WCS(lookup_hdr; fobj=:unsupported)
 end
 
 # ──────────────────────────────────────────────────────────────────────────────

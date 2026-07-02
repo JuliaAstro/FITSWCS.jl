@@ -538,7 +538,7 @@ end
 # ──────────────────────────────────────────────────────────────────────────────
 
 """
-    WCS(header; alt=' ') -> WCSTransform
+    WCS(header; fobj=nothing, alt=' ', minerr=0.0) -> WCSTransform
 
 Parse a FITS WCS header into a `WCSTransform`.
 
@@ -546,8 +546,13 @@ Parse a FITS WCS header into a `WCSTransform`.
 values.  FITSIO.jl `FITSHeader` objects can be converted to `Dict` with
 `Dict(header)`, or use the FITSIO extension if available.
 
+`fobj` optionally supplies the owning FITS container for external WCS arrays.
 `alt` selects the alternate WCS description character (`' '` for the primary,
 `'A'`–`'Z'` for alternates).
+`minerr` is reserved for Paper IV distortion support: when auxiliary lookup
+tables are implemented, distortion components whose declared error estimate is
+below `minerr` may be skipped.  It is currently passed through to auxiliary-data
+resolver methods but is not used by the core header-only parser.
 
 Throws `ArgumentError` for headers that are clearly malformed (e.g., axis
 count mismatch in a CD or PC matrix keyword).
@@ -569,11 +574,12 @@ hdr = Dict(
 wcs = WCS(hdr)
 ```
 """
-function WCS(header::AbstractDict; alt::Char=' ')
+function WCS(header::AbstractDict; fobj=nothing, alt::Char=' ', minerr::Real=0.0)
     if alt != ' ' && !(('A' <= alt <= 'Z'))
         throw(ArgumentError("alt must be ' ' or 'A'–'Z', got $(repr(alt))"))
     end
     alt_str = alt == ' ' ? "" : string(alt)
+    aux = _auxiliary_wcs_data(header, fobj; alt=alt, minerr=minerr)
 
     # ── Number of WCS axes ────────────────────────────────────────────────────
     # WCSAXES takes precedence over NAXIS (Paper I, Sec. 2.1).
@@ -725,6 +731,6 @@ function WCS(header::AbstractDict; alt::Char=' ')
         SMatrix{naxis,naxis,Float64,naxis*naxis}(cd),
         ctype, cunit,
         lonpole, latpole, alpha_p, delta_p,
-        projection, pipeline, lon_axis, lat_axis,
+        projection, pipeline, aux, lon_axis, lat_axis,
     )
 end
