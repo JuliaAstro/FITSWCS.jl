@@ -369,6 +369,29 @@ end
 
 # ──────────────────────────────────────────────────────────────────────────────
 
+"""Abstract supertype for pre-linear pixel/focal-plane distortion pipelines."""
+abstract type AbstractDistortionPipeline end
+
+"""Identity distortion pipeline for WCS transforms with no pre-linear distortion."""
+struct NoDistortionPipeline <: AbstractDistortionPipeline end
+
+"""
+    DistortionPipeline
+
+Pre-linear distortion pipeline.  The current implementation uses the `sip`
+field; `det2im` and `cpdis` are reserved for Paper IV lookup-table stages.
+"""
+struct DistortionPipeline{S<:Union{Nothing,SIPDistortion},D,C} <: AbstractDistortionPipeline
+    det2im::NTuple{2,Union{Nothing,D}}
+    sip::S
+    cpdis::NTuple{2,Union{Nothing,C}}
+end
+
+DistortionPipeline(sip::SIPDistortion) =
+    DistortionPipeline{typeof(sip),Nothing,Nothing}((nothing, nothing), sip, (nothing, nothing))
+
+# ──────────────────────────────────────────────────────────────────────────────
+
 """
     WCSTransform
 
@@ -402,11 +425,11 @@ array indices the values are numerically identical; no offset is required.
                  Paper II.  Precomputed during construction.
 - `projection` – spherical projection for the celestial axes, or `nothing` for
                  purely linear WCS.
-- `sip`        – optional SIP distortion applied before the linear transform.
+- `pipeline`   – pre-linear pixel/focal-plane distortion pipeline.
 - `lon_axis`   – 1-based index of the longitude axis; 0 if no celestial axes.
 - `lat_axis`   – 1-based index of the latitude axis; 0 if no celestial axes.
 """
-struct WCSTransform{N,L,P<:Union{Nothing,AbstractProjection},S<:Union{Nothing,SIPDistortion}}
+struct WCSTransform{N,L,P<:Union{Nothing,AbstractProjection},D<:AbstractDistortionPipeline}
     naxis::Int
     crpix::SVector{N,Float64}
     crval::SVector{N,Float64}
@@ -418,7 +441,7 @@ struct WCSTransform{N,L,P<:Union{Nothing,AbstractProjection},S<:Union{Nothing,SI
     alpha_p::Float64          # degrees; celestial lon of native N pole
     delta_p::Float64          # degrees; celestial lat of native N pole
     projection::P
-    sip::S
+    pipeline::D
     lon_axis::Int             # 1-based index; 0 = no celestial lon axis
     lat_axis::Int             # 1-based index; 0 = no celestial lat axis
 end

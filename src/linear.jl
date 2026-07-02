@@ -29,16 +29,8 @@ function pixel_to_intermediate(wcs::WCSTransform{N}, pixel::AbstractVector) wher
         throw(DimensionMismatch("pixel has length $(length(pixel)), expected $N"))
 
     T = _coordinate_float_type(pixel)
-    delta = if wcs.sip === nothing
-        SVector{N,T}(ntuple(i -> T(pixel[i]) - T(wcs.crpix[i]), N))
-    else
-        # SIP corrects only axes 1–2; axes 3+ pass through unchanged.
-        fx, fy = sip_pixel_to_focal(wcs.sip, pixel)
-        SVector{N,T}(ntuple(i ->
-            i == 1 ? T(fx) - T(wcs.crpix[1]) :
-            i == 2 ? T(fy) - T(wcs.crpix[2]) :
-            T(pixel[i]) - T(wcs.crpix[i]), N))
-    end
+    focal = pixel_to_focal(wcs.pipeline, pixel, Val(N))
+    delta = SVector{N,T}(ntuple(i -> T(focal[i]) - T(wcs.crpix[i]), N))
     return wcs.cd * delta
 end
 
@@ -56,16 +48,7 @@ function intermediate_to_pixel(wcs::WCSTransform{N}, intermediate::StaticVector{
     # Undo the linear matrix to recover focal/image-plane pixel coordinates.
     focal = wcs.crpix .+ (wcs.cd \ intermediate)
 
-    if wcs.sip === nothing
-        return SVector{N,T}(focal)
-    else
-        # SIP corrects only axes 1–2; axes 3+ pass through unchanged.
-        px, py = sip_focal_to_pixel(wcs.sip, focal)
-        return SVector{N,T}(ntuple(i ->
-            i == 1 ? T(px) :
-            i == 2 ? T(py) :
-            T(focal[i]), N))
-    end
+    return focal_to_pixel(wcs.pipeline, focal, Val(N))
 end
 
 function intermediate_to_pixel(wcs::WCSTransform{N}, intermediate::AbstractVector) where {N}

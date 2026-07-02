@@ -182,7 +182,7 @@ world_to_pixel(wcs::WCSTransform, world::Tuple{Vararg{Real}}) =
 
 function _pixel_to_intermediate_batch(wcs::WCSTransform{A}, pixels::AbstractMatrix, ::Type{T}) where {A,T<:AbstractFloat}
     _, ncoords = size(pixels)
-    if wcs.sip === nothing
+    if !has_distortion(wcs.pipeline)
         # Apply CD to all pixel coordinates, then fold in the constant CRPIX offset.
         cd = Matrix{T}(wcs.cd)
         intermediate = cd * _typed_matrix(T, pixels)
@@ -195,9 +195,9 @@ function _pixel_to_intermediate_batch(wcs::WCSTransform{A}, pixels::AbstractMatr
 
     offsets = Matrix{T}(undef, A, ncoords)
 
-    # SIP must be applied column-wise before the batched CD transform.
+    # Distortions are applied column-wise before the batched CD transform.
     for k in 1:ncoords
-        focal = sip_pixel_to_focal(wcs.sip, view(pixels, :, k))
+        focal = pixel_to_focal(wcs.pipeline, view(pixels, :, k), Val(A))
         for i in 1:A
             offsets[i, k] = T(focal[i]) - T(wcs.crpix[i])
         end
@@ -212,11 +212,11 @@ function _intermediate_to_pixel_batch(wcs::WCSTransform{A}, intermediate::Abstra
         pixels[i, k] += T(wcs.crpix[i])
     end
 
-    # Apply inverse SIP column-wise because the polynomial solve is per coordinate.
-    wcs.sip === nothing && return pixels
+    # Apply inverse distortions column-wise because the solve is per coordinate.
+    !has_distortion(wcs.pipeline) && return pixels
     result = similar(pixels, T, A, size(pixels, 2))
     for k in axes(pixels, 2)
-        result[:, k] = sip_focal_to_pixel(wcs.sip, view(pixels, :, k))
+        result[:, k] = focal_to_pixel(wcs.pipeline, view(pixels, :, k), Val(A))
     end
     return result
 end

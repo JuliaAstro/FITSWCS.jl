@@ -10,7 +10,9 @@ using FITSWCS: pixel_to_intermediate, intermediate_to_pixel,
                native_to_celestial, celestial_to_native,
                compute_native_pole,
                unit_to_deg, build_cd_matrix,
-               evaluate_sip_polynomial, sip_pixel_to_focal, sip_focal_to_pixel
+               evaluate_sip_polynomial, sip_pixel_to_focal, sip_focal_to_pixel,
+               NoDistortionPipeline, DistortionPipeline,
+               pixel_to_focal, focal_to_pixel, has_distortion
 
 # Convenience shorthand
 const D2R = π / 180.0
@@ -448,10 +450,40 @@ end
             "A_2_0" => 1e-3, "B_0_2" => -2e-3,
         )
         wcs = WCS(hdr)
-        @test wcs.sip isa SIPDistortion
-        @test wcs.sip.a[3, 1] == 1e-3
-        @test wcs.sip.b[1, 3] == -2e-3
+        @test wcs.pipeline isa DistortionPipeline
+        @test wcs.pipeline.sip isa SIPDistortion
+        @test wcs.pipeline.sip.a[3, 1] == 1e-3
+        @test wcs.pipeline.sip.b[1, 3] == -2e-3
         @test wcs.projection isa TAN
+    end
+
+    @testset "Distortion pipeline identity and SIP dispatch" begin
+        # NoDistortionPipeline should be a no-op, while SIP pipelines correct axes 1–2.
+        hdr_plain = Dict(
+            "NAXIS"  => 2,
+            "CTYPE1" => "X",
+            "CTYPE2" => "Y",
+            "CRPIX1" => 1.0, "CRPIX2" => 1.0,
+            "CDELT1" => 1.0, "CDELT2" => 1.0,
+        )
+        plain = WCS(hdr_plain)
+        @test plain.pipeline isa NoDistortionPipeline
+        @test !has_distortion(plain.pipeline)
+        @test pixel_to_focal(plain.pipeline, [2.0, 3.0], Val(2)) ≈ [2.0, 3.0]
+        @test focal_to_pixel(plain.pipeline, [2.0, 3.0], Val(2)) ≈ [2.0, 3.0]
+        static_pixel = SVector(2.0, 3.0)
+        @test pixel_to_focal(plain.pipeline, static_pixel, Val(2)) === static_pixel
+        @test focal_to_pixel(plain.pipeline, static_pixel, Val(2)) === static_pixel
+        @test pixel_to_focal(plain.pipeline, [2.0, 3.0], Val(2)) isa SVector{2,Float64}
+
+        hdr_sip = copy(hdr_plain)
+        hdr_sip["A_ORDER"] = 2
+        hdr_sip["B_ORDER"] = 2
+        hdr_sip["A_2_0"] = 0.1
+        sip_wcs = WCS(hdr_sip)
+        @test sip_wcs.pipeline isa DistortionPipeline
+        @test has_distortion(sip_wcs.pipeline)
+        @test pixel_to_focal(sip_wcs.pipeline, [3.0, 3.0], Val(2)) ≈ [3.4, 3.0]
     end
 
     @testset "Polynomial evaluation uses CRPIX-relative powers" begin
@@ -476,7 +508,7 @@ end
         )
         wcs = WCS(hdr)
         pix = [12.0, 23.0]
-        focal = sip_pixel_to_focal(wcs.sip, pix)
+        focal = sip_pixel_to_focal(wcs.pipeline.sip, pix)
         @test focal ≈ [12.4, 21.2]
         @test pixel_to_intermediate(wcs, pix) ≈ [2.4, 1.2]
     end
@@ -494,7 +526,7 @@ end
             "AP_1_0" => -0.1, "BP_0_1" => 0.2,
         )
         wcs = WCS(hdr)
-        @test sip_focal_to_pixel(wcs.sip, [10.0, 5.0]) ≈ [9.0, 6.0]
+        @test sip_focal_to_pixel(wcs.pipeline.sip, [10.0, 5.0]) ≈ [9.0, 6.0]
     end
 
     @testset "Iterative inverse round-trips when AP/BP are absent" begin
@@ -509,8 +541,8 @@ end
         )
         wcs = WCS(hdr)
         pix = [103.0, 98.0]
-        focal = sip_pixel_to_focal(wcs.sip, pix)
-        @test sip_focal_to_pixel(wcs.sip, focal) ≈ pix atol=1e-8
+        focal = sip_pixel_to_focal(wcs.pipeline.sip, pix)
+        @test sip_focal_to_pixel(wcs.pipeline.sip, focal) ≈ pix atol=1e-8
     end
 
     @testset "SIP public transforms round-trip through linear WCS" begin
@@ -600,7 +632,7 @@ end
         sip_hdr["CTYPE2"] = "DEC--TAN-SIP"
         sip_hdr["A_ORDER"] = 2
         sip_hdr["B_ORDER"] = 2
-        @test WCS(sip_hdr).sip isa SIPDistortion
+        @test WCS(sip_hdr).pipeline.sip isa SIPDistortion
     end
 
     @testset "SIP with 3D cube (RA/DEC/FREQ)" begin
@@ -617,7 +649,7 @@ end
         )
         wcs = WCS(hdr)
         @test wcs.naxis == 3
-        @test wcs.sip isa SIPDistortion
+        @test wcs.pipeline.sip isa SIPDistortion
 
         # Forward: spectral axis passes through unchanged.
         pix = [300.0, 280.0, 5.0]  # off-reference in all axes
@@ -671,7 +703,7 @@ end
 
         @test wcs_sip.lon_axis == 1
         @test wcs_sip.lat_axis == 3
-        @test wcs_sip.sip isa SIPDistortion
+        @test wcs_sip.pipeline.sip isa SIPDistortion
 
         # Spectral axis must pass through SIP unchanged (SIP only touches axes 1–2).
         pix = [30.0, 43.0, 45.0]
@@ -1969,7 +2001,7 @@ end
         )
         wcs_sip = WCS(hdr_sip)
         @test wcs_sip.projection isa TPV
-        @test wcs_sip.sip === nothing   # SIP was stripped
+        @test wcs_sip.pipeline isa NoDistortionPipeline   # SIP was stripped
     end
 
     @testset "TPV Float32 type stability" begin

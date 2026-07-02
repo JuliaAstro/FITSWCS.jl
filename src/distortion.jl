@@ -101,6 +101,12 @@ function parse_sip_distortion(header::AbstractDict, crpix::Vector{Float64},
     return SIPDistortion(SVector{2,Float64}(crpix[1:2]), a, b, ap, bp)
 end
 
+distortion_pipeline(::Nothing) = NoDistortionPipeline()
+distortion_pipeline(sip::SIPDistortion) = DistortionPipeline(sip)
+
+has_distortion(::NoDistortionPipeline) = false
+has_distortion(::DistortionPipeline) = true
+
 function evaluate_sip_polynomial(coeff::AbstractMatrix, u::Real, v::Real)
     T = _promote_float_type(u, v)
     order = size(coeff, 1) - 1
@@ -179,4 +185,68 @@ function sip_focal_to_pixel(sip::SIPDistortion, focal::AbstractVector)
           "(final residual $prev_r > tolerance $tol); " *
           "returning best estimate"
     return SVector{2,T}(pixel)
+end
+
+function pixel_to_focal(::NoDistortionPipeline, pixel::AbstractVector, ::Val{N}) where {N}
+    length(pixel) == N ||
+        throw(DimensionMismatch("pixel has length $(length(pixel)), expected $N"))
+
+    # Materialize the identity focal coordinate in stable static storage.
+    T = _coordinate_float_type(pixel)
+    return SVector{N,T}(ntuple(i -> T(pixel[i]), N))
+end
+
+function pixel_to_focal(::NoDistortionPipeline, pixel::StaticVector{N}, ::Val{N}) where {N}
+    # Static coordinates are already fixed-size, so identity distortion can return them directly.
+    return pixel
+end
+
+function pixel_to_focal(pipeline::DistortionPipeline, pixel::AbstractVector, ::Val{N}) where {N}
+    length(pixel) == N ||
+        throw(DimensionMismatch("pixel has length $(length(pixel)), expected $N"))
+
+    # Preserve identity behavior for future non-SIP pipeline variants.
+    T = _coordinate_float_type(pixel)
+    if pipeline.sip === nothing
+        return SVector{N,T}(ntuple(i -> T(pixel[i]), N))
+    end
+
+    # Apply the SIP stage; axes outside the two SIP axes pass through unchanged.
+    fx, fy = sip_pixel_to_focal(pipeline.sip, pixel)
+    return SVector{N,T}(ntuple(i ->
+        i == 1 ? T(fx) :
+        i == 2 ? T(fy) :
+        T(pixel[i]), N))
+end
+
+function focal_to_pixel(::NoDistortionPipeline, focal::AbstractVector, ::Val{N}) where {N}
+    length(focal) == N ||
+        throw(DimensionMismatch("focal coordinate has length $(length(focal)), expected $N"))
+
+    # Materialize the identity pixel coordinate in stable static storage.
+    T = _coordinate_float_type(focal)
+    return SVector{N,T}(ntuple(i -> T(focal[i]), N))
+end
+
+function focal_to_pixel(::NoDistortionPipeline, focal::StaticVector{N}, ::Val{N}) where {N}
+    # Static coordinates are already fixed-size, so identity inversion can return them directly.
+    return focal
+end
+
+function focal_to_pixel(pipeline::DistortionPipeline, focal::AbstractVector, ::Val{N}) where {N}
+    length(focal) == N ||
+        throw(DimensionMismatch("focal coordinate has length $(length(focal)), expected $N"))
+
+    # Preserve identity behavior for future non-SIP pipeline variants.
+    T = _coordinate_float_type(focal)
+    if pipeline.sip === nothing
+        return SVector{N,T}(ntuple(i -> T(focal[i]), N))
+    end
+
+    # Invert the SIP stage; full pipeline inversion will extend this.
+    px, py = sip_focal_to_pixel(pipeline.sip, focal)
+    return SVector{N,T}(ntuple(i ->
+        i == 1 ? T(px) :
+        i == 2 ? T(py) :
+        T(focal[i]), N))
 end
