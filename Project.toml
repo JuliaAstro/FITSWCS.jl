@@ -4,11 +4,11 @@ version = "0.1.0"
 authors = ["Chris Garling"]
 
 [deps]
-FITSFiles = "358a0a88-3548-4ad6-b652-8bdbf64af8e5"
 LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
 StaticArrays = "90137ffa-7385-5640-81b9-e52037218182"
 
 [weakdeps]
+FITSFiles = "358a0a88-3548-4ad6-b652-8bdbf64af8e5"
 FITSIO = "525bcba6-941b-5504-bd06-fd0dc1a4d2eb"
 
 [extensions]
