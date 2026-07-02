@@ -634,6 +634,23 @@ Implementation notes:
   metadata explicitly instead of rejecting them.
 * Add image/table HDU readers through existing FITSIO.jl and FITSFiles.jl
   extensions.
+* Extend the public parsing API beyond header-only inputs.  Astropy requires
+  `WCS(header, fobj=hdulist)` for Paper IV lookup distortions because the
+  header keywords only identify auxiliary image extensions such as `WCSDVARR`
+  and `D2IMARR`; the array payloads must be read from the FITS HDUList.  A
+  FITSWCS API needs an equivalent way to pass the owning HDU list or a lookup
+  resolver into `from_header`.
+* Preserve the distinction Astropy exposes between the full pipeline and the
+  core wcslib transform: `all_pix2world` / `all_world2pix` apply detector
+  lookup tables, SIP, Paper IV lookup tables, and then the core WCS, while
+  `wcs_pix2world` / `wcs_world2pix` operate on the core WCS only.  In Astropy,
+  loaded lookup distortions are also visible as `cpdis1`, `cpdis2`, `det2im1`,
+  and `det2im2` fields on the `WCS` object.
+* Do not assume `WCS.jl` can supply these fixtures as a reference path.  Local
+  probes against WCS.jl 0.6.3 / wcslib 7.7.0 failed on Astropy's
+  `dist_lookup.fits.gz` SCI header with `Invalid parameter value`; WCS.jl's
+  public `from_header(header::String)` API has no place to pass the HDUList
+  needed to populate the lookup arrays.
 * Implement bilinear interpolation for lookup-table offsets.
 * Invert the complete distortion pipeline with a vectorized iterative solver
   and convergence diagnostics.
@@ -670,6 +687,18 @@ would need to:
 * Read the binary table extension (coordinate array column + optional
   indexing column) from the FITS file through the FITSIO.jl or FITSFiles.jl
   extensions.
+* Add an API for supplying the owning HDU list or a table resolver to the WCS
+  parser.  Astropy's API is `WCS(header, fobj=hdulist)`; header-only
+  construction raises `ValueError` for `-TAB` because the WCS-TABLE extension
+  contains the coordinate/index arrays.  The resulting Astropy `WCS` object
+  stores table descriptors in `w.wcs.wtb` and the public transforms operate
+  through `all_pix2world` / `all_world2pix`.
+* Treat WCS.jl as an incomplete comparison source for this feature.  Although
+  WCS.jl exposes `from_header(header; table=true)` and mirrors wcslib `tabprm`
+  pointers internally, local probes with Astropy's `example_4d_tab.fits` and
+  `tab-time-last-axis.fits` failed at setup with `Invalid parameter value`.
+  The missing piece is the same as for Astropy header-only construction: no
+  public API supplies the HDUList table contents.
 * Implement linear interpolation between table entries for pixel→world and
   an iterative inversion (or use an inverse index array) for world→pixel.
 * This couples the WCS parser to the file loader in a way the current
