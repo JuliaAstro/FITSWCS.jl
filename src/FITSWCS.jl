@@ -24,7 +24,7 @@ hdr = Dict(
     "CRVAL1" => 83.8221, "CRVAL2" => -5.3911,
     "CDELT1" => -2.7778e-4, "CDELT2" => 2.7778e-4,
 )
-wcs = from_header(hdr)
+wcs = WCS(hdr)
 
 # Convert pixel → world (RA/Dec in degrees)
 world = pixel_to_world(wcs, [512.0, 512.0])   # → [83.8221, -5.3911]
@@ -63,7 +63,6 @@ export
 
     # Parsing
     WCS,
-    from_header,
 
     # Transforms
     pixel_to_world,

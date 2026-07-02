@@ -19,7 +19,7 @@ using FITSWCS
         "CRVAL1" => 120.0,       "CRVAL2" => 35.0,
         "CDELT1" => -0.05,       "CDELT2" => 0.05,
     )
-    wcs = from_header(hdr)
+    wcs = WCS(hdr)
 
     for (pix, world_ref) in [
         ([128.0,  96.0], [120.0, 35.0]),
@@ -44,7 +44,7 @@ end
         "CRVAL1" => 120.0,       "CRVAL2" => 35.0,
         "CDELT1" => -0.05,       "CDELT2" => 0.05,
     )
-    wcs = from_header(hdr)
+    wcs = WCS(hdr)
 
     for (pix, world_ref) in [
         ([128.0,  96.0], [120.0, 35.0]),
@@ -70,7 +70,7 @@ end
         "CDELT1" => -1.0,        "CDELT2" => 1.0,
         "PV2_1"  => 0.75,
     )
-    wcs = from_header(hdr)
+    wcs = WCS(hdr)
 
     for (pix, world_ref) in [
         ([181.0,  91.0], [40.0, 0.0]),
@@ -147,7 +147,7 @@ end
             "CRVAL1" => 30.0,         "CRVAL2" => -10.0,
             "CDELT1" => -0.5,         "CDELT2" => 0.5,
         )
-        wcs = from_header(hdr)
+        wcs = WCS(hdr)
 
         for (pix, world_ref) in refs[code]
             world = pixel_to_world(wcs, pix)
@@ -168,7 +168,7 @@ end
         "CDELT1" => -1.0,        "CDELT2" => 1.0,
         "CUNIT1" => "arcsec",    "CUNIT2" => "arcsec",
     )
-    wcs = from_header(hdr)
+    wcs = WCS(hdr)
 
     for (pix, world_ref) in [
         ([100.0, 100.0], [10.0, 20.0]),
@@ -192,7 +192,7 @@ end
         "CDELT1" => -1.0e-4,     "CDELT2" => 1.0e-4,
         "CUNIT1" => "rad",       "CUNIT2" => "rad",
     )
-    wcs = from_header(hdr)
+    wcs = WCS(hdr)
 
     for (pix, world_ref) in [
         ([100.0, 100.0], [28.647889756541161, 14.323944878270581]),
@@ -215,7 +215,7 @@ end
         "CRVAL1" => 10.0,        "CRVAL2" => 1.42e9,  "CRVAL3" => 25.0,
         "CDELT1" => -0.01,       "CDELT2" => 1.0e6,   "CDELT3" => 0.01,
     )
-    wcs = from_header(hdr)
+    wcs = WCS(hdr)
 
     for (pix, world_ref) in [
         ([30.0, 40.0, 45.0], [10.0, 1.42e9, 25.0]),
@@ -243,7 +243,7 @@ end
         "CDELT1" => -0.001,      "CDELT2" => 0.001,
         "CDELT3" => 0.5,         "CDELT4" => 1.0,
     )
-    wcs = from_header(hdr)
+    wcs = WCS(hdr)
 
     for (pix, world_ref) in [
         ([10.0, 20.0,  1.0, 1.0], [30.0, -5.0, 59000.0, 1.0]),
@@ -266,7 +266,7 @@ end
         "CDELT1" => -0.05,       "CDELT2" => 0.05,
         "PV2_0"  => 0.0,         "PV2_1" => 1.0,
     )
-    wcs = from_header(hdr)
+    wcs = WCS(hdr)
     for (pix, world_ref) in [
         ([128.0,  96.0], [120.0, 35.0]),
         ([140.0,  96.0], [119.26754837335794, 34.99780028281103]),
@@ -288,7 +288,7 @@ end
         "CDELT1" => -0.05,       "CDELT2" => 0.05,
         "PV2_0"  => 0.0,         "PV2_1" => 1.0,  "PV2_2" => 0.1,
     )
-    wcs2 = from_header(hdr2)
+    wcs2 = WCS(hdr2)
     for (pix, world_ref) in [
         ([128.0,  96.0], [120.0, 35.0]),
         ([140.0,  96.0], [119.26831376526451, 34.99780487775835]),
@@ -336,7 +336,7 @@ end
         if theta_b != 90.0
             hdr["PV2_1"] = theta_b
         end
-        wcs = from_header(hdr)
+        wcs = WCS(hdr)
         for (pix, world_ref) in refs
             world = pixel_to_world(wcs, pix)
             @test world ≈ world_ref atol=1e-10
@@ -384,7 +384,7 @@ end
             "CDELT1" => -0.05,         "CDELT2" => 0.05,
             "PV2_1"  => sigma,         "PV2_2"  => delta,
         )
-        wcs = from_header(hdr)
+        wcs = WCS(hdr)
         for (pix, world_ref) in refs
             world = pixel_to_world(wcs, pix)
             @test world ≈ world_ref atol=1e-10
@@ -425,7 +425,7 @@ end
             "CDELT1" => -0.05,       "CDELT2" => 0.05,
             "PV2_1"  => theta1,
         )
-        wcs = from_header(hdr)
+        wcs = WCS(hdr)
         for (pix, world_ref) in refs
             world = pixel_to_world(wcs, pix)
             @test world ≈ world_ref atol=1e-10
@@ -471,7 +471,7 @@ end
             "CRVAL1" => 0.0,           "CRVAL2" => 0.0,
             "CDELT1" => -1.0,          "CDELT2" => 1.0,
         )
-        wcs = from_header(hdr)
+        wcs = WCS(hdr)
         # CSC uses float32 coefficients in WCSLIB; allow 2e-6 tolerance.
         tol = code == "CSC" ? 2e-6 : 1e-10
         for (pix, world_ref) in refs
@@ -492,7 +492,7 @@ end
         "CRVAL1" => 0.0,         "CRVAL2" => 0.0,
         "CDELT1" => -1.0,        "CDELT2" => 1.0,
     )
-    wcs = from_header(hdr)
+    wcs = WCS(hdr)
     for (pix, world_ref) in [
         ([181.0,  91.0], [0.0, 0.0]),
         ([200.0,  91.0], [341.0, 0.0]),
@@ -523,7 +523,7 @@ end
         "CRVAL1" => 0.0,         "CRVAL2" => 0.0,
         "CDELT1" => -1.0,        "CDELT2" => 1.0,
     )
-    wcs = from_header(hdr)
+    wcs = WCS(hdr)
     for (pix, world_ref) in [
         ([181.0,  91.0], [4.296495291499103e-31, 0.0]),
         ([200.0,  91.0], [345.9981858501239, 8.5754787178752e-16]),
@@ -550,7 +550,7 @@ end
         "PV2_0"  => 0.0,         "PV2_1" => 1.0,
         "PV2_2"  => 0.1,         "PV2_3" => 0.01,
     )
-    wcs = from_header(hdr)
+    wcs = WCS(hdr)
     for (pix, world_ref) in [
         ([128.0,  96.0], [120.0, 34.999999999998195]),
         ([140.0,  96.0], [119.26831456426916, 34.997804882552586]),
@@ -573,7 +573,7 @@ end
         "CDELT1" => -0.05,       "CDELT2" => 0.05,
         "PV2_1"  => 0.75,        "PV2_2"  => 1.5,
     )
-    wcs = from_header(hdr)
+    wcs = WCS(hdr)
     for (pix, world_ref) in [
         ([128.0,  96.0], [120.0, 35.0]),
         ([140.0,  96.0], [119.51169405397991, 34.99902233565226]),
@@ -626,7 +626,7 @@ end
             "CDELT1" => -0.05,         "CDELT2" => 0.05,
             "PV2_1"  => sigma,         "PV2_2"  => delta,
         )
-        wcs = from_header(hdr)
+        wcs = WCS(hdr)
         for (pix, world_ref) in refs
             world = pixel_to_world(wcs, pix)
             @test world ≈ world_ref atol=1e-10
@@ -660,7 +660,7 @@ end
             "CDELT1" => -0.05,       "CDELT2" => 0.05,
             "PV2_1"  => mu,          "PV2_2"  => gamma,
         )
-        wcs = from_header(hdr)
+        wcs = WCS(hdr)
         for (pix, world_ref) in refs
             world = pixel_to_world(wcs, pix)
             @test world ≈ world_ref atol=1e-10
@@ -679,7 +679,7 @@ end
         "PV2_1"  => 2.0,         "PV2_2"  => 30.0,
         "PV2_3"  => 60.0,
     )
-    wcs = from_header(hdr)
+    wcs = WCS(hdr)
     for (pix, world_ref) in [
         ([128.0,  96.0], [120.0, 35.0]),
         ([140.0,  96.0], [119.26683754697535, 34.998793786159396]),

@@ -111,7 +111,7 @@ end
             "CRVAL1" => 10.0,  "CRVAL2" =>  20.0,
             "CDELT1" => -1e-4, "CDELT2" =>  1e-4,
         )
-        wcs = from_header(hdr)
+        wcs = WCS(hdr)
         @test wcs.naxis     == 2
         @test wcs.crpix     == [100.0, 200.0]
         @test wcs.crval     == [10.0, 20.0]
@@ -131,7 +131,7 @@ end
             "CD1_1"  => 2e-4, "CD1_2" => 0.0,
             "CD2_1"  => 0.0,  "CD2_2" => 2e-4,
         )
-        wcs = from_header(hdr)
+        wcs = WCS(hdr)
         @test wcs.cd[1, 1] ≈ 2e-4
         @test wcs.cd[2, 2] ≈ 2e-4
     end
@@ -147,7 +147,7 @@ end
             "PC1_1"  => 1.0, "PC1_2" => 0.0,
             "PC2_1"  => 0.0, "PC2_2" => 1.0,
         )
-        wcs = from_header(hdr)
+        wcs = WCS(hdr)
         @test wcs.cd[1, 1] ≈ -2e-4
         @test wcs.cd[2, 2] ≈  2e-4
         @test wcs.cd[1, 2] == 0.0
@@ -163,7 +163,7 @@ end
             "PV2_1"  => 0.1,
             "PV2_2"  => -0.2,
         )
-        wcs = from_header(hdr)
+        wcs = WCS(hdr)
         @test wcs.projection == SIN(0.1, -0.2)
     end
 
@@ -175,12 +175,12 @@ end
             "CTYPE2" => "DEC--CEA",
             "PV2_1"  => 0.75,
         )
-        wcs = from_header(hdr)
+        wcs = WCS(hdr)
         @test wcs.projection == CEA(0.75)
 
         bad = copy(hdr)
         bad["PV2_1"] = 0.0
-        @test_throws ArgumentError from_header(bad)
+        @test_throws ArgumentError WCS(bad)
     end
 
     @testset "Error: PC and CD matrix forms cannot be mixed" begin
@@ -192,7 +192,7 @@ end
             "PC1_1"  => 1.0,
             "CD1_1"  => 1.0,
         )
-        @test_throws ArgumentError from_header(hdr)
+        @test_throws ArgumentError WCS(hdr)
     end
 
     @testset "CROTA2 legacy rotation" begin
@@ -207,7 +207,7 @@ end
             "CDELT1" => -cdelt, "CDELT2" => cdelt,
             "CROTA2" => 45.0,
         )
-        wcs = from_header(hdr)
+        wcs = WCS(hdr)
         rho = 45.0 * D2R
         @test wcs.cd[1, 1] ≈ -cdelt * cos(rho)   atol=1e-15
         @test wcs.cd[1, 2] ≈ -cdelt * sin(rho)   atol=1e-15
@@ -224,7 +224,7 @@ end
             "CRVAL1" => 0.0, "CRVAL2" => 0.0,
             "CDELT1" => 1.0, "CDELT2" => 1.0,
         )
-        wcs = from_header(hdr)
+        wcs = WCS(hdr)
         @test wcs.projection === nothing
         @test wcs.lon_axis   == 0
         @test wcs.lat_axis   == 0
@@ -238,7 +238,7 @@ end
             "CRVAL1" => 1.4e9,
             "CDELT1" => 1e6,
         )
-        wcs = from_header(hdr)
+        wcs = WCS(hdr)
         @test wcs.naxis == 1
         @test wcs.projection === nothing
     end
@@ -253,7 +253,7 @@ end
             "CRVAL1" => 0.0, "CRVAL2" => 0.0,
             "CDELT1" => -1e-4, "CDELT2" => 1e-4,
         )
-        wcs = from_header(hdr)
+        wcs = WCS(hdr)
         @test wcs.naxis == 2
     end
 
@@ -267,7 +267,7 @@ end
             "CRVAL3" => 1.4e9,
             "CDELT3" => 1e6,
         )
-        wcs = from_header(hdr)
+        wcs = WCS(hdr)
         @test wcs.naxis == 3
         @test wcs.crpix == [0.0, 0.0, 0.0]
     end
@@ -281,7 +281,7 @@ end
             "CTYPE2"  => "Y",
             "CTYPE3"  => "FREQ",
         )
-        @test_throws ArgumentError from_header(hdr)
+        @test_throws ArgumentError WCS(hdr)
     end
 
     @testset "Error: explicit WCSAXES bounds PV keywords" begin
@@ -293,7 +293,7 @@ end
             "CTYPE2"  => "DEC--SIN",
             "PV3_1"   => 0.1,
         )
-        @test_throws ArgumentError from_header(hdr)
+        @test_throws ArgumentError WCS(hdr)
     end
 
     @testset "LONPOLE defaults" begin
@@ -306,7 +306,7 @@ end
             "CRVAL1" => 0.0, "CRVAL2" => 45.0,
             "CDELT1" => -1e-4, "CDELT2" => 1e-4,
         )
-        wcs = from_header(hdr)
+        wcs = WCS(hdr)
         @test wcs.lonpole == 180.0
 
         # CAR/AIT: crval[lat] = 0 = theta0=0 → lonpole = 180 (standard orientation)
@@ -318,7 +318,7 @@ end
             "CRVAL1" => 0.0, "CRVAL2" => 0.0,
             "CDELT1" => -1e-4, "CDELT2" => 1e-4,
         )
-        wcs_car = from_header(hdr_car)
+        wcs_car = WCS(hdr_car)
         @test wcs_car.lonpole == 180.0
 
         # CAR: crval[lat] = 30 > theta0=0 → lonpole = 0
@@ -330,12 +330,12 @@ end
             "CRVAL1" => 0.0, "CRVAL2" => 30.0,
             "CDELT1" => -1e-4, "CDELT2" => 1e-4,
         )
-        wcs_car2 = from_header(hdr_car2)
+        wcs_car2 = WCS(hdr_car2)
         @test wcs_car2.lonpole == 0.0
     end
 
     @testset "Error: missing NAXIS/WCSAXES" begin
-        @test_throws ArgumentError from_header(Dict("CRPIX1" => 1.0))
+        @test_throws ArgumentError WCS(Dict("CRPIX1" => 1.0))
     end
 
     @testset "Alternate WCS keyword suffix selects independent solution" begin
@@ -352,12 +352,12 @@ end
             "CDELT1A" => 0.5,
         )
 
-        primary = from_header(hdr)
-        alternate = from_header(hdr; alt='A')
+        primary = WCS(hdr)
+        alternate = WCS(hdr; alt='A')
 
         @test pixel_to_world(primary, [2.0]) ≈ [1.001e9]
         @test pixel_to_world(alternate, [7.0]) ≈ [501.0]
-        @test_throws ArgumentError from_header(hdr; alt='a')
+        @test_throws ArgumentError WCS(hdr; alt='a')
     end
 
     @testset "Error: mismatched projection codes" begin
@@ -369,7 +369,7 @@ end
             "CRVAL1" => 0.0, "CRVAL2" => 0.0,
             "CDELT1" => 1e-4, "CDELT2" => 1e-4,
         )
-        @test_throws ArgumentError from_header(hdr)
+        @test_throws ArgumentError WCS(hdr)
     end
 
     @testset "Error: TAB lookup axes are explicitly unsupported" begin
@@ -381,15 +381,15 @@ end
             "CRVAL1" => 1.0,
             "CDELT1" => 1.0,
         )
-        @test_throws ArgumentError from_header(hdr)
+        @test_throws ArgumentError WCS(hdr)
 
         alt_hdr = Dict(
             "NAXIS"   => 1,
             "CTYPE1"  => "FREQ",
             "CTYPE1A" => "WAVE-TAB",
         )
-        @test pixel_to_world(from_header(alt_hdr), [2.0]) ≈ [2.0]
-        @test_throws ArgumentError from_header(alt_hdr; alt='A')
+        @test pixel_to_world(WCS(alt_hdr), [2.0]) ≈ [2.0]
+        @test_throws ArgumentError WCS(alt_hdr; alt='A')
     end
 
     @testset "Error: non-linear spectral algorithms are explicitly unsupported" begin
@@ -401,7 +401,7 @@ end
             "CRVAL1" => 1.0e9,
             "CDELT1" => 1.0e6,
         )
-        @test_throws ArgumentError from_header(hdr)
+        @test_throws ArgumentError WCS(hdr)
 
         alt_hdr = Dict(
             "NAXIS"   => 1,
@@ -411,8 +411,8 @@ end
             "CRVAL1A" => 500.0,
             "CDELT1A" => 1.0,
         )
-        @test pixel_to_world(from_header(alt_hdr), [2.0]) ≈ [2.0]
-        @test_throws ArgumentError from_header(alt_hdr; alt='A')
+        @test pixel_to_world(WCS(alt_hdr), [2.0]) ≈ [2.0]
+        @test_throws ArgumentError WCS(alt_hdr; alt='A')
     end
 
     @testset "Celestial units are converted without changing linear axes" begin
@@ -427,7 +427,7 @@ end
             "CDELT1" => 3600.0, "CDELT2" => 3600.0, "CDELT3" => 2.0,
             "CUNIT1" => "arcsec", "CUNIT2" => "arcsec", "CUNIT3" => "pixel",
         )
-        wcs = from_header(hdr)
+        wcs = WCS(hdr)
         @test wcs.cd[1, 1] ≈ 1.0
         @test wcs.cd[2, 2] ≈ 1.0
         @test wcs.cd[3, 3] ≈ 2.0
@@ -447,7 +447,7 @@ end
             "A_ORDER" => 2, "B_ORDER" => 2,
             "A_2_0" => 1e-3, "B_0_2" => -2e-3,
         )
-        wcs = from_header(hdr)
+        wcs = WCS(hdr)
         @test wcs.sip isa SIPDistortion
         @test wcs.sip.a[3, 1] == 1e-3
         @test wcs.sip.b[1, 3] == -2e-3
@@ -474,7 +474,7 @@ end
             "A_ORDER" => 2, "B_ORDER" => 2,
             "A_2_0" => 0.1, "B_0_2" => -0.2,
         )
-        wcs = from_header(hdr)
+        wcs = WCS(hdr)
         pix = [12.0, 23.0]
         focal = sip_pixel_to_focal(wcs.sip, pix)
         @test focal ≈ [12.4, 21.2]
@@ -493,7 +493,7 @@ end
             "AP_ORDER" => 2, "BP_ORDER" => 2,
             "AP_1_0" => -0.1, "BP_0_1" => 0.2,
         )
-        wcs = from_header(hdr)
+        wcs = WCS(hdr)
         @test sip_focal_to_pixel(wcs.sip, [10.0, 5.0]) ≈ [9.0, 6.0]
     end
 
@@ -507,7 +507,7 @@ end
             "A_ORDER" => 2, "B_ORDER" => 2,
             "A_2_0" => 1e-4, "B_0_2" => -2e-4,
         )
-        wcs = from_header(hdr)
+        wcs = WCS(hdr)
         pix = [103.0, 98.0]
         focal = sip_pixel_to_focal(wcs.sip, pix)
         @test sip_focal_to_pixel(wcs.sip, focal) ≈ pix atol=1e-8
@@ -525,7 +525,7 @@ end
             "A_ORDER" => 2, "B_ORDER" => 2,
             "A_2_0" => 1e-3, "B_0_2" => -1e-3,
         )
-        wcs = from_header(hdr)
+        wcs = WCS(hdr)
         pix = [12.0, 23.0]
         world = pixel_to_world(wcs, pix)
         @test world ≈ [104.008, 208.973]
@@ -534,17 +534,17 @@ end
 
     @testset "Malformed SIP headers throw clear errors" begin
         # SIP requires explicit CRPIX and matched forward/inverse order pairs.
-        @test_throws ArgumentError from_header(Dict(
+        @test_throws ArgumentError WCS(Dict(
             "NAXIS" => 2,
             "A_ORDER" => 2,
             "B_ORDER" => 2,
         ))
-        @test_throws ArgumentError from_header(Dict(
+        @test_throws ArgumentError WCS(Dict(
             "NAXIS" => 2,
             "CRPIX1" => 0.0, "CRPIX2" => 0.0,
             "A_ORDER" => 2,
         ))
-        @test_throws ArgumentError from_header(Dict(
+        @test_throws ArgumentError WCS(Dict(
             "NAXIS" => 2,
             "CRPIX1" => 0.0, "CRPIX2" => 0.0,
             "A_ORDER" => 2, "B_ORDER" => 2,
@@ -573,7 +573,7 @@ end
         ]
             hdr = copy(base)
             hdr[key] = value
-            @test_throws ArgumentError from_header(hdr)
+            @test_throws ArgumentError WCS(hdr)
         end
 
         # Alternate WCS lookup metadata should affect only the selected alternate.
@@ -590,8 +590,8 @@ end
         ]
             hdr = copy(alt_base)
             hdr[key] = value
-            @test from_header(hdr) isa WCSTransform
-            @test_throws ArgumentError from_header(hdr; alt='A')
+            @test WCS(hdr) isa WCSTransform
+            @test_throws ArgumentError WCS(hdr; alt='A')
         end
 
         # SIP is implemented and should still parse through the distortion path.
@@ -600,7 +600,7 @@ end
         sip_hdr["CTYPE2"] = "DEC--TAN-SIP"
         sip_hdr["A_ORDER"] = 2
         sip_hdr["B_ORDER"] = 2
-        @test from_header(sip_hdr).sip isa SIPDistortion
+        @test WCS(sip_hdr).sip isa SIPDistortion
     end
 
     @testset "SIP with 3D cube (RA/DEC/FREQ)" begin
@@ -615,7 +615,7 @@ end
             "A_ORDER" => 2, "B_ORDER" => 2,
             "A_0_1" => 1e-5, "B_1_0" => -2e-5,
         )
-        wcs = from_header(hdr)
+        wcs = WCS(hdr)
         @test wcs.naxis == 3
         @test wcs.sip isa SIPDistortion
 
@@ -642,7 +642,7 @@ end
             "CRVAL1" => 10.0,       "CRVAL2" => 1.42e9, "CRVAL3" => 25.0,
             "CDELT1" => -0.01,      "CDELT2" => 1.0e6,  "CDELT3" => 0.01,
         )
-        wcs = from_header(hdr)
+        wcs = WCS(hdr)
 
         @test wcs.lon_axis == 1
         @test wcs.lat_axis == 3
@@ -667,7 +667,7 @@ end
             "A_ORDER" => 2, "B_ORDER" => 2,
             "A_0_1" => 1e-5, "B_1_0" => -2e-5,
         )
-        wcs_sip = from_header(hdr_sip)
+        wcs_sip = WCS(hdr_sip)
 
         @test wcs_sip.lon_axis == 1
         @test wcs_sip.lat_axis == 3
@@ -694,7 +694,7 @@ end
             "CRVAL1" => 10.0,       "CRVAL2" => 1.42e9, "CRVAL3" => 25.0,
             "CDELT1" => -0.01,      "CDELT2" => 1.0e6,  "CDELT3" => 0.01,
         )
-        wcs = from_header(hdr)
+        wcs = WCS(hdr)
         pixels = [30.0 29.0 31.5;
                   40.0 43.0 37.0;
                   45.0 44.0 47.0]
@@ -724,7 +724,7 @@ end
             "CDELT1" => -0.001,     "CDELT2" => 0.001,
             "CDELT3" => 0.5,        "CDELT4" => 1.0,
         )
-        wcs = from_header(hdr)
+        wcs = WCS(hdr)
         pix = [10.0, 20.0, 3.0, 4.0]
         world = pixel_to_world(wcs, pix)
 
@@ -813,7 +813,7 @@ end
             "CRVAL1" => 0.0, "CRVAL2" => 0.0,
             "CDELT1" => 1.0, "CDELT2" => 1.0,
         )
-        wcs = from_header(hdr)
+        wcs = WCS(hdr)
         # pixel [1,1] → world [0,0]
         @test pixel_to_world(wcs, [1.0, 1.0]) ≈ [0.0, 0.0]
         # world [0,0] → pixel [1,1]
@@ -826,7 +826,7 @@ end
     @testset "Paper I defaults make pixel values equal world values" begin
         # With default CRPIX=0, CRVAL=0, CDELT=1, coordinates follow pixel values.
         hdr = Dict("NAXIS" => 2)
-        wcs = from_header(hdr)
+        wcs = WCS(hdr)
         @test pixel_to_world(wcs, [1.0, 1.0]) ≈ [1.0, 1.0]
         @test world_to_pixel(wcs, [3.0, 4.0]) ≈ [3.0, 4.0]
     end
@@ -840,7 +840,7 @@ end
             "CRVAL1" => 100.0, "CRVAL2" => 200.0,
             "CDELT1" => 1.0, "CDELT2" => 1.0,
         )
-        wcs = from_header(hdr)
+        wcs = WCS(hdr)
         @test pixel_to_world(wcs, [10.0, 20.0]) ≈ [100.0, 200.0]
         @test world_to_pixel(wcs, [100.0, 200.0]) ≈ [10.0, 20.0]
         @test pixel_to_world(wcs, [11.0, 20.0]) ≈ [101.0, 200.0]
@@ -855,7 +855,7 @@ end
             "CRVAL1" => 0.0, "CRVAL2" => 0.0,
             "CDELT1" => 0.5, "CDELT2" => 2.0,
         )
-        wcs = from_header(hdr)
+        wcs = WCS(hdr)
         @test pixel_to_world(wcs, [3.0, 2.0]) ≈ [1.0, 2.0]
         @test world_to_pixel(wcs, [1.0, 2.0]) ≈ [3.0, 2.0]
     end
@@ -872,7 +872,7 @@ end
             "PC1_1"  => 0.0, "PC1_2" => -1.0,
             "PC2_1"  => 1.0, "PC2_2" =>  0.0,
         )
-        wcs = from_header(hdr)
+        wcs = WCS(hdr)
         # pixel [1,0] → world [0, 1]   (90° CCW rotation)
         w = pixel_to_world(wcs, [1.0, 0.0])
         @test w ≈ [0.0, 1.0]  atol=1e-14
@@ -890,7 +890,7 @@ end
             "CRVAL1" => 5.0,  "CRVAL2" => -3.0, "CRVAL3" => 0.1,
             "CDELT1" => 2.0,  "CDELT2" => -0.5, "CDELT3" => 0.01,
         )
-        wcs = from_header(hdr)
+        wcs = WCS(hdr)
         pixels = [1.0, 10.0, 50.0]
         world  = pixel_to_world(wcs, pixels)
         @test world_to_pixel(wcs, world) ≈ pixels  atol=1e-10
@@ -904,7 +904,7 @@ end
             "CRVAL1" => 0.0, "CRVAL2" => 0.0,
             "CDELT1" => 1.0, "CDELT2" => 1.0,
         )
-        wcs = from_header(hdr)
+        wcs = WCS(hdr)
         pix_mat = [1.0 5.0 10.0;
                    1.0 5.0 10.0]
         w_batch = pixel_to_world(wcs, pix_mat)
@@ -1031,7 +1031,7 @@ end
         "CDELT1" => -0.01, "CDELT2" => 0.01,
         "PV2_1"  => 0.1, "PV2_2" => -0.05,
     )
-    wcs = from_header(hdr)
+    wcs = WCS(hdr)
 
     @testset "Round-trip off reference pixel" begin
         # The slant terms make this distinct from the standard orthographic SIN path.
@@ -1174,13 +1174,13 @@ end
     end
 
     # Non-default AZP/SZP parameters parse and roundtrip correctly.
-    azp_wcs = from_header(Dict(
+    azp_wcs = WCS(Dict(
         "NAXIS" => 2, "CTYPE1" => "RA---AZP", "CTYPE2" => "DEC--AZP",
         "CRPIX1" => 128.0, "CRPIX2" => 96.0, "CRVAL1" => 120.0, "CRVAL2" => 35.0,
         "CDELT1" => -0.05, "CDELT2" => 0.05, "PV2_1" => 1.0,
     ))
     @test azp_wcs.projection == AZP(1.0, 0.0)
-    szp_wcs = from_header(Dict(
+    szp_wcs = WCS(Dict(
         "NAXIS" => 2, "CTYPE1" => "RA---SZP", "CTYPE2" => "DEC--SZP",
         "CRPIX1" => 128.0, "CRPIX2" => 96.0, "CRVAL1" => 120.0, "CRVAL2" => 35.0,
         "CDELT1" => -0.05, "CDELT2" => 0.05, "PV2_3" => 45.0,
@@ -1247,7 +1247,7 @@ end
             "NAXIS" => 2, "CTYPE1" => "RA---CYP", "CTYPE2" => "DEC--CYP",
             "PV2_1" => 0.75, "PV2_2" => 1.5,
         )
-        @test from_header(hdr).projection == CYP(0.75, 1.5)
+        @test WCS(hdr).projection == CYP(0.75, 1.5)
 
         proj = CYP(0.75, 1.5)
         phi_r = 30.0 * D2R
@@ -1302,7 +1302,7 @@ end
         "CRVAL1" => 83.8221, "CRVAL2" => -5.3911,
         "CDELT1" => -2.7778e-4, "CDELT2" => 2.7778e-4,
     )
-    wcs = from_header(hdr)
+    wcs = WCS(hdr)
 
     @testset "Reference pixel → CRVAL" begin
         world = pixel_to_world(wcs, [512.0, 512.0])
@@ -1368,7 +1368,7 @@ end
         "CRVAL1" => 0.0,   "CRVAL2" => 0.0,
         "CDELT1" => -0.5,  "CDELT2" => 0.5,
     )
-    wcs = from_header(hdr)
+    wcs = WCS(hdr)
     @test wcs.projection isa AIT
 
     @testset "Round-trip center" begin
@@ -1407,7 +1407,7 @@ end
         "CRVAL1" => 0.0,   "CRVAL2" => 0.0,
         "CDELT1" => -1.0,  "CDELT2" => 1.0,
     )
-    wcs = from_header(hdr)
+    wcs = WCS(hdr)
     @test wcs.projection isa CAR
 
     @testset "Equatorial pixel row has latitude = 0" begin
@@ -1446,7 +1446,7 @@ end
         "CDELT1" => -1.0,  "CDELT2" => 1.0,
         "PV2_1"  => 1.0,
     )
-    wcs = from_header(hdr)
+    wcs = WCS(hdr)
     @test wcs.projection == CEA(1.0)
 
     @testset "Equatorial pixel row has latitude = 0" begin
@@ -1481,14 +1481,14 @@ end
         fill("", 5),
     )
 
-    wcs = from_header(header)
+    wcs = WCS(header)
     @test pixel_to_world(wcs, [3.0]) ≈ [104.0]
 
     mktempdir() do dir
         path = joinpath(dir, "linear.fits")
         FITSIO.FITS(path, "w") do file
             FITSIO.write(file, zeros(Float32, 4); header=header)
-            hdu_wcs = from_header(file[1])
+            hdu_wcs = WCS(file[1])
             @test pixel_to_world(hdu_wcs, [3.0]) ≈ [104.0]
         end
     end
@@ -1508,11 +1508,11 @@ end
         FITSFiles.Card("CDELT1", 2.0),
     ]
 
-    wcs = from_header(cards)
+    wcs = WCS(cards)
     @test pixel_to_world(wcs, [3.0]) ≈ [104.0]
 
     hdu = FITSFiles.HDU(cards)
-    hdu_wcs = from_header(hdu)
+    hdu_wcs = WCS(hdu)
     @test pixel_to_world(hdu_wcs, [3.0]) ≈ [104.0]
 end
 
@@ -1553,15 +1553,15 @@ end
         "CDELT1" => -0.01,      "CDELT2" =>  0.01,        "CDELT3" => 1.0e6,
     )
 
-    wcs_lin = from_header(hdr_lin)
-    wcs_tan = from_header(hdr_tan)
-    wcs_sip = from_header(hdr_sip)
-    wcs_3d  = from_header(hdr_3d)
+    wcs_lin = WCS(hdr_lin)
+    wcs_tan = WCS(hdr_tan)
+    wcs_sip = WCS(hdr_sip)
+    wcs_3d  = WCS(hdr_3d)
 
     # Parsed transforms should store small numeric WCS state in static arrays.
-    @test from_header(hdr_lin) isa WCSTransform
-    @test from_header(hdr_tan) isa WCSTransform
-    @test from_header(hdr_sip) isa WCSTransform
+    @test WCS(hdr_lin) isa WCSTransform
+    @test WCS(hdr_tan) isa WCSTransform
+    @test WCS(hdr_sip) isa WCSTransform
     @test wcs_tan.crpix isa SVector{2,Float64}
     @test wcs_tan.crval isa SVector{2,Float64}
     @test wcs_tan.cd isa SMatrix{2,2,Float64,4}
@@ -1616,7 +1616,7 @@ end
                 hdr["CRVAL$i"] = crval[i]
                 hdr["CDELT$i"] = cdelt[i]
             end
-            wcs = from_header(hdr)
+            wcs = WCS(hdr)
 
             # Random pixel point well away from any edge effects.
             pix = crpix .+ 10.0 .* (rand(rng, naxis) .- 0.5)
@@ -1643,7 +1643,7 @@ end
                 "PC1_1"  => pc[1,1],    "PC1_2"  => pc[1,2],
                 "PC2_1"  => pc[2,1],    "PC2_2"  => pc[2,2],
             )
-            wcs = from_header(hdr)
+            wcs = WCS(hdr)
 
             # CD matrix should equal CDELT * PC elementwise (up to float round-off).
             for i in 1:2, j in 1:2
@@ -1718,7 +1718,7 @@ end
                 "CRVAL1" => crval1,     "CRVAL2" => crval2,
                 "CDELT1" => -cdelt,     "CDELT2" => cdelt,
             )
-            wcs = from_header(hdr)
+            wcs = WCS(hdr)
 
             # Pixel near the reference point.
             pix = [256.0 + 10.0*randn(rng), 256.0 + 10.0*randn(rng)]
@@ -1880,7 +1880,7 @@ end
             "CRVAL1" => 83.8221, "CRVAL2" => -5.3911,
             "CDELT1" => -2.7778e-4, "CDELT2" => 2.7778e-4,
         )
-        wcs = from_header(hdr)
+        wcs = WCS(hdr)
         @test wcs.projection isa TPV
         # Should behave like TAN with no extra distortion.
         pix = [256.0, 256.0]
@@ -1900,7 +1900,7 @@ end
             "PV2_2" => 1.0,     # identity y term
             "PV2_6" => -2e-6,   # y² term on axis 2
         )
-        wcs2 = from_header(hdr2)
+        wcs2 = WCS(hdr2)
         t = wcs2.projection
         @test t isa TPV
         @test t.xcoeff[1] == 0.0     # m=0 (constant), zero-filled gap
@@ -1923,7 +1923,7 @@ end
             "CRVAL1" => 45.0, "CRVAL2" => 30.0,
             "CDELT1" => -0.01, "CDELT2" => 0.01,
         )
-        wcs3 = from_header(hdr3)
+        wcs3 = WCS(hdr3)
         @test wcs3.projection isa TPV
     end
 
@@ -1939,7 +1939,7 @@ end
             "PV1_5" => 1e-6,    # j=5 signals SCAMP
             "PV2_2" => 1.0,
         )
-        wcs_pre = from_header(hdr_pre)
+        wcs_pre = WCS(hdr_pre)
         @test wcs_pre.projection isa TPV
 
         # TAN with only low-index PV keywords (j < 5) is NOT misdetected.
@@ -1954,7 +1954,7 @@ end
             "PV2_3" => 0.0,    # j=3
             "PV2_4" => 0.0,    # j=4 — highest sub-threshold index
         )
-        wcs_tan_low = from_header(hdr_tan_low)
+        wcs_tan_low = WCS(hdr_tan_low)
         @test wcs_tan_low.projection isa TAN
 
         # TPV + SIP: SIP keywords stripped (SCAMP rule).
@@ -1967,7 +1967,7 @@ end
             "A_ORDER" => 2, "B_ORDER" => 2,
             "A_0_1" => 1e-5, "B_0_1" => -2e-5,
         )
-        wcs_sip = from_header(hdr_sip)
+        wcs_sip = WCS(hdr_sip)
         @test wcs_sip.projection isa TPV
         @test wcs_sip.sip === nothing   # SIP was stripped
     end
@@ -2001,7 +2001,7 @@ end
             "CRVAL1" => 83.8221, "CRVAL2" => -5.3911,
             "CDELT1" => -2.7778e-4, "CDELT2" => 2.7778e-4,
         )
-        wcs32 = from_header(hdr32)
+        wcs32 = WCS(hdr32)
         pix32 = Float32[256.0, 256.0]
         world32 = pixel_to_world(wcs32, pix32)
         @test eltype(world32) == Float32
@@ -2026,7 +2026,7 @@ end
             "PV2_2" => 1.0,     # identity y
             "PV2_6" => -1e-7,   # small y² correction
         )
-        wcs = from_header(hdr)
+        wcs = WCS(hdr)
         @test wcs.projection isa TPV
 
         test_pixels = [

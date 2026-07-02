@@ -538,7 +538,7 @@ end
 # ──────────────────────────────────────────────────────────────────────────────
 
 """
-    from_header(header; alt=' ') -> WCSTransform
+    WCS(header; alt=' ') -> WCSTransform
 
 Parse a FITS WCS header into a `WCSTransform`.
 
@@ -566,10 +566,10 @@ hdr = Dict(
     "CDELT1" => -2.7778e-4,
     "CDELT2" =>  2.7778e-4,
 )
-wcs = from_header(hdr)
+wcs = WCS(hdr)
 ```
 """
-function from_header(header::AbstractDict; alt::Char=' ')
+function WCS(header::AbstractDict; alt::Char=' ')
     if alt != ' ' && !(('A' <= alt <= 'Z'))
         throw(ArgumentError("alt must be ' ' or 'A'–'Z', got $(repr(alt))"))
     end

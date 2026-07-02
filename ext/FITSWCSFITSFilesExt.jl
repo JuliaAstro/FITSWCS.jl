@@ -1,7 +1,7 @@
 module FITSWCSFITSFilesExt
 
 import FITSFiles
-import FITSWCS: from_header
+import FITSWCS: WCS
 
 function _fitsfiles_cards_dict(cards::FITSFiles.Cards)
     # Copy card keyword/value pairs into the dictionary shape used by core parsing.
@@ -12,14 +12,14 @@ function _fitsfiles_cards_dict(cards::FITSFiles.Cards)
     return dict
 end
 
-function from_header(cards::FITSFiles.Cards; alt::Char=' ')
+function WCS(cards::FITSFiles.Cards; alt::Char=' ')
     # Delegate all WCS validation and interpretation to the core parser.
-    return from_header(_fitsfiles_cards_dict(cards); alt=alt)
+    return WCS(_fitsfiles_cards_dict(cards); alt=alt)
 end
 
-function from_header(hdu::FITSFiles.HDU; alt::Char=' ')
+function WCS(hdu::FITSFiles.HDU; alt::Char=' ')
     # FITSFiles stores parsed header cards directly on each HDU.
-    return from_header(hdu.cards; alt=alt)
+    return WCS(hdu.cards; alt=alt)
 end
 
 end # module FITSWCSFITSFilesExt

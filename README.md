@@ -23,7 +23,7 @@ header = Dict(
     "CDELT1" => -2.7778e-4, "CDELT2" => 2.7778e-4,
 )
 
-wcs = from_header(header)
+wcs = WCS(header)
 world = pixel_to_world(wcs, [512.0, 512.0])
 pixel = world_to_pixel(wcs, world)
 ```
@@ -35,9 +35,9 @@ vectors of coordinate vectors.
 
 ## WCS.jl-Style Names
 
-For migration experiments, FITSWCS.jl also exports:
+For migration experiments, FITSWCS.jl also exports WCS.jl-style helper names:
 
-- `WCS(header)` as an alias for `from_header(header)`
+- `WCS(header)` as the main parser/constructor for FITS-like headers
 - `WCSTransform(naxis; kwds...)` for WCS.jl-style programmatic construction
   from core vectors/matrices such as `crpix`, `crval`, `cdelt`, `ctype`,
   `cunit`, `pc`, `cd`, and `crota`
@@ -48,7 +48,8 @@ For migration experiments, FITSWCS.jl also exports:
 
 These aliases keep FITSWCS.jl's FITS 1-based pixel convention.  They do not
 implement WCS.jl's full status-returning transform API, intermediate work-array
-keywords, or 0-origin pixel convention.
+keywords, or an Astropy-style `origin` argument / shim for zero-based pixel
+coordinates.
 
 ## Supported Header Keywords
 
@@ -57,7 +58,7 @@ The parser currently supports these image-WCS keyword families:
 - axis count: `NAXIS`, `WCSAXES`
 - per-axis values: `CTYPEi`, `CUNITi`, `CRPIXi`, `CRVALi`, `CDELTi`
 - linear transforms: `PCi_ja`, `CDi_ja`, and legacy `CROTA2`
-- alternate WCS suffixes through `from_header(header; alt='A')`
+- alternate WCS suffixes through `WCS(header; alt='A')`
 - celestial pole keywords: `LONPOLE`, `LATPOLE`
 - projection parameters used by implemented projections, including:
   `PV<lat>_1`, `PV<lat>_2`, `PV<lat>_3`, `PV<lat>_0..30` for `ZPN`, and
@@ -95,7 +96,7 @@ Unknown projection codes throw an informative error at transform time.
 
 ## FITS Loader Extensions
 
-When the corresponding package is loaded, `from_header` accepts:
+When the corresponding package is loaded, `WCS` accepts:
 
 - `FITSIO.FITSHeader`
 - `FITSIO.HDU`

@@ -1,7 +1,7 @@
 module FITSWCSFITSIOExt
 
 import FITSIO
-import FITSWCS: from_header
+import FITSWCS: WCS
 
 function _fitsio_header_dict(header::FITSIO.FITSHeader)
     # Copy keyword/value pairs into the dictionary shape used by core parsing.
@@ -12,14 +12,14 @@ function _fitsio_header_dict(header::FITSIO.FITSHeader)
     return dict
 end
 
-function from_header(header::FITSIO.FITSHeader; alt::Char=' ')
+function WCS(header::FITSIO.FITSHeader; alt::Char=' ')
     # Delegate all WCS validation and interpretation to the core parser.
-    return from_header(_fitsio_header_dict(header); alt=alt)
+    return WCS(_fitsio_header_dict(header); alt=alt)
 end
 
-function from_header(hdu::FITSIO.HDU; alt::Char=' ')
+function WCS(hdu::FITSIO.HDU; alt::Char=' ')
     # Read the HDU header through FITSIO before using the header adapter.
-    return from_header(FITSIO.read_header(hdu); alt=alt)
+    return WCS(FITSIO.read_header(hdu); alt=alt)
 end
 
 end # module FITSWCSFITSIOExt
