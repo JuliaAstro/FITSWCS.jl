@@ -43,13 +43,13 @@ module FITSWCS
 using LinearAlgebra: I, \
 using StaticArrays: SMatrix, SVector, StaticVector
 
-include("types.jl")
 include("units.jl")
 include("utilities.jl")
 include("projections.jl")
-include("celestial.jl")
+include("lookup_tables.jl")
 include("distortion.jl")
 include("auxiliary_data.jl")
+include("celestial.jl")
 include("parsing.jl")
 include("linear.jl")
 include("transforms.jl")

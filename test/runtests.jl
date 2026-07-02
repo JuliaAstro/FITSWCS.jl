@@ -13,6 +13,7 @@ using FITSWCS: pixel_to_intermediate, intermediate_to_pixel,
                evaluate_sip_polynomial, sip_pixel_to_focal, sip_focal_to_pixel,
                NoDistortionPipeline, DistortionPipeline,
                pixel_to_focal, focal_to_pixel, has_distortion,
+               LookupTable2D, interpolate_lookup_table,
                NoAuxiliaryWCSData, AuxiliaryWCSData,
                has_auxiliary, _auxiliary_wcs_data
 
@@ -871,6 +872,41 @@ end
     lookup_hdr["CPDIS1"] = "LOOKUP"
     @test_throws ArgumentError WCS(lookup_hdr)
     @test_throws ArgumentError WCS(lookup_hdr; fobj=:unsupported)
+end
+
+# ──────────────────────────────────────────────────────────────────────────────
+@testset "LookupTable2D interpolation" begin
+    # Paper IV lookup tables need predictable bilinear interpolation and clamping.
+    data = Float64[0.0 10.0; 20.0 30.0]
+    table = LookupTable2D(data; crpix=(1, 1), crval=(1, 1), cdelt=(1, 1))
+
+    @test interpolate_lookup_table(table, 1.0, 1.0) == 0.0
+    @test interpolate_lookup_table(table, 2.0, 1.0) == 20.0
+    @test interpolate_lookup_table(table, SVector(1.5, 1.5)) == 15.0
+    @test interpolate_lookup_table(table, 1.25, 1.75) ≈ 12.5
+    @test interpolate_lookup_table(table, -100.0, 1.0) == 0.0
+    @test interpolate_lookup_table(table, 100.0, 100.0) == 30.0
+    @test table(1.25, 1.75) == interpolate_lookup_table(table, 1.25, 1.75)
+    @test table(SVector(1.5, 1.5)) == interpolate_lookup_table(table, SVector(1.5, 1.5))
+
+    metadata_table = LookupTable2D(
+        reshape(Float64.(1:12), 3, 4);
+        crpix=(2, 3),
+        crval=(100, 200),
+        cdelt=(10, -20),
+    )
+    @test interpolate_lookup_table(metadata_table, 100.0, 200.0) == metadata_table.data[2, 3]
+    @test metadata_table(100.0, 200.0) == interpolate_lookup_table(metadata_table, 100.0, 200.0)
+
+    typed_table = LookupTable2D(Float32[1 3; 5 7]; crpix=(1.0, 1.0), crval=(0.0, 0.0), cdelt=(2.0, 2.0))
+    @test typed_table.crpix isa SVector{2,Float32}
+    @test typed_table.crval isa SVector{2,Float32}
+    @test typed_table.cdelt isa SVector{2,Float32}
+
+    singleton_table = LookupTable2D(reshape(Float64[2.0, 6.0], 1, 2))
+    @test interpolate_lookup_table(singleton_table, 100.0, 0.5) == 4.0
+
+    @test_throws ArgumentError LookupTable2D(zeros(Float64, 0, 2))
 end
 
 # ──────────────────────────────────────────────────────────────────────────────

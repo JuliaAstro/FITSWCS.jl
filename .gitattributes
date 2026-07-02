@@ -1,0 +1,8 @@
+*.jl text eol=crlf
+*.py text eol=crlf
+*.md text eol=crlf
+*.toml text eol=crlf
+*.yml text eol=crlf
+*.yaml text eol=crlf
+*.txt text eol=crlf
+

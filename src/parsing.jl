@@ -16,6 +16,62 @@ The suffix `a` denotes an alternate WCS description character ('A'–'Z').
 The primary description uses a blank suffix.
 """
 
+"""
+    WCSTransform
+
+Parsed, validated FITS World Coordinate System transform.
+
+## Coordinate conventions
+
+Pixel coordinates follow the **FITS 1-based** convention: pixel 1 is the
+centre of the first array element.  This matches the FITS standard and the
+values stored in `CRPIX` header keywords.  When working with Julia 1-based
+array indices the values are numerically identical; no offset is required.
+
+## Fields
+
+- `naxis`      – number of WCS axes.
+- `crpix`      – reference pixel position (FITS 1-based), length `naxis`.
+- `crval`      – world coordinate value at the reference pixel, length `naxis`.
+- `cd`         – combined CD matrix (naxis × naxis), where
+                 `cd[i,j] = CDELT_i * PC_i_j` (or the explicit `CD_i_j` value).
+                 Units match `cunit`.
+- `ctype`      – FITS `CTYPEi` strings, length `naxis`.
+- `cunit`      – FITS `CUNITi` strings (empty string means degrees for
+                 celestial axes), length `naxis`.
+- `lonpole`    – native longitude of the celestial pole (degrees), φₚ in Paper II.
+- `latpole`    – native latitude of the celestial pole hint (degrees), θₚ in
+                 Paper II; used to resolve the `delta_p` ambiguity.
+- `alpha_p`    – celestial longitude of the native north pole (degrees), αₚ in
+                 Paper II.  Precomputed during construction; not a direct FITS
+                 keyword.
+- `delta_p`    – celestial latitude of the native north pole (degrees), δₚ in
+                 Paper II.  Precomputed during construction.
+- `projection` – spherical projection for the celestial axes, or `nothing` for
+                 purely linear WCS.
+- `pipeline`   – pre-linear pixel/focal-plane distortion pipeline.
+- `aux`        – resolved auxiliary WCS data, or `NoAuxiliaryWCSData`.
+- `lon_axis`   – 1-based index of the longitude axis; 0 if no celestial axes.
+- `lat_axis`   – 1-based index of the latitude axis; 0 if no celestial axes.
+"""
+struct WCSTransform{N, L, P <: Union{Nothing, AbstractProjection}, D <: AbstractDistortionPipeline, A <: AbstractAuxiliaryWCSData}
+    naxis::Int
+    crpix::SVector{N, Float64}
+    crval::SVector{N, Float64}
+    cd::SMatrix{N, N, Float64, L}       # naxis × naxis
+    ctype::Vector{String}
+    cunit::Vector{String}
+    lonpole::Float64          # degrees; φₚ (Paper II)
+    latpole::Float64          # degrees; used during construction
+    alpha_p::Float64          # degrees; celestial lon of native N pole
+    delta_p::Float64          # degrees; celestial lat of native N pole
+    projection::P
+    pipeline::D
+    aux::A
+    lon_axis::Int             # 1-based index; 0 = no celestial lon axis
+    lat_axis::Int             # 1-based index; 0 = no celestial lat axis
+end
+
 # ──────────────────────────────────────────────────────────────────────────────
 # CTYPE parsing helpers
 # ──────────────────────────────────────────────────────────────────────────────
@@ -385,7 +441,7 @@ function _wcs_axis_indices(key::AbstractString, alt_str::AbstractString)
     end
 
     # Strip the alternate suffix before matching indexed WCS keyword forms.
-    core = isempty(alt_str) ? key : key[1:lastindex(key) - ncodeunits(alt_str)]
+    core = isempty(alt_str) ? key : key[1:(lastindex(key) - ncodeunits(alt_str))]
 
     # Single-index keywords carry one WCS axis number.
     m = match(r"^(?:CRPIX|CRVAL|CDELT|CTYPE|CUNIT)([1-9][0-9]*)$", core)
@@ -509,20 +565,20 @@ function build_cd_matrix(header::AbstractDict, naxis::Int,
     # ── Try CROTA2 legacy keyword ─────────────────────────────────────────────
     crota_key = "CROTA2$(alt_str)"
     if naxis >= 2 && haskey(header, crota_key)
-        crota  = Float64(header[crota_key])
+        crota = Float64(header[crota_key])
         # Paper I, Appendix A, Eq. A2:
         # CD11 = CDELT1*cos(rho)   CD12 = -CDELT2*sin(rho)
         # CD21 = CDELT1*sin(rho)   CD22 =  CDELT2*cos(rho)
-        rho    = crota * (π / 180.0)
+        rho = crota * (π / 180.0)
         cr, sr = cos(rho), sin(rho)
         # Fill in only 2D part for CROTA; off-diagonal higher axes stay 0.
         for k in 1:naxis
             cd[k, k] = cdelt[k]
         end
-        cd[1, 1] =  cdelt[1] * cr
+        cd[1, 1] = cdelt[1] * cr
         cd[1, 2] = -cdelt[2] * sr
-        cd[2, 1] =  cdelt[1] * sr
-        cd[2, 2] =  cdelt[2] * cr
+        cd[2, 1] = cdelt[1] * sr
+        cd[2, 2] = cdelt[2] * cr
         return cd
     end
 
@@ -574,16 +630,16 @@ hdr = Dict(
 wcs = WCS(hdr)
 ```
 """
-function WCS(header::AbstractDict; fobj=nothing, alt::Char=' ', minerr::Real=0.0)
+function WCS(header::AbstractDict; fobj = nothing, alt::Char = ' ', minerr::Real = 0.0)
     if alt != ' ' && !(('A' <= alt <= 'Z'))
         throw(ArgumentError("alt must be ' ' or 'A'–'Z', got $(repr(alt))"))
     end
     alt_str = alt == ' ' ? "" : string(alt)
-    aux = _auxiliary_wcs_data(header, fobj; alt=alt, minerr=minerr)
+    aux = _auxiliary_wcs_data(header, fobj; alt = alt, minerr = minerr)
 
     # ── Number of WCS axes ────────────────────────────────────────────────────
     # WCSAXES takes precedence over NAXIS (Paper I, Sec. 2.1).
-    naxis_key  = "WCSAXES$(alt_str)"
+    naxis_key = "WCSAXES$(alt_str)"
     naxis_key2 = "WCSAXES"
     naxis = if haskey(header, naxis_key)
         Int(header[naxis_key])
@@ -613,8 +669,8 @@ function WCS(header::AbstractDict; fobj=nothing, alt::Char=' ', minerr::Real=0.0
         crpix[i] = Float64(get(header, "CRPIX$(i)$(alt_str)", 0.0))
         crval[i] = Float64(get(header, "CRVAL$(i)$(alt_str)", 0.0))
         cdelt[i] = Float64(get(header, "CDELT$(i)$(alt_str)", 1.0))
-        ctype[i] = String(get(header,  "CTYPE$(i)$(alt_str)", ""))
-        cunit[i] = String(get(header,  "CUNIT$(i)$(alt_str)", ""))
+        ctype[i] = String(get(header, "CTYPE$(i)$(alt_str)", ""))
+        cunit[i] = String(get(header, "CUNIT$(i)$(alt_str)", ""))
     end
     reject_tabular_axes(ctype)
     reject_unsupported_nonlinear_axes(ctype)
@@ -630,7 +686,7 @@ function WCS(header::AbstractDict; fobj=nothing, alt::Char=' ', minerr::Real=0.0
             if lon_axis != 0
                 throw(ArgumentError("header has multiple longitude axes (CTYPE$(lon_axis) and CTYPE$(i))"))
             end
-            lon_axis  = i
+            lon_axis = i
             proj_code = pc
         elseif coord_type == :lat
             if lat_axis != 0
@@ -714,21 +770,23 @@ function WCS(header::AbstractDict; fobj=nothing, alt::Char=' ', minerr::Real=0.0
     if projection !== nothing && lon_axis > 0 && lat_axis > 0
         alpha0 = crval[lon_axis] * (π / 180.0)
         delta0 = crval[lat_axis] * (π / 180.0)
-        phi0   = native_phi0(projection) * (π / 180.0)
+        phi0 = native_phi0(projection) * (π / 180.0)
         theta0 = native_theta0(projection) * (π / 180.0)
-        phi_p  = lonpole * (π / 180.0)
+        phi_p = lonpole * (π / 180.0)
 
-        ap, dp = compute_native_pole(alpha0, delta0, phi0, theta0, phi_p,
-                                        latpole * (π / 180.0))
+        ap, dp = compute_native_pole(
+            alpha0, delta0, phi0, theta0, phi_p,
+            latpole * (π / 180.0)
+        )
         alpha_p = ap * (180.0 / π)
         delta_p = dp * (180.0 / π)
     end
 
     return WCSTransform(
         naxis,
-        SVector{naxis,Float64}(crpix),
-        SVector{naxis,Float64}(crval),
-        SMatrix{naxis,naxis,Float64,naxis*naxis}(cd),
+        SVector{naxis, Float64}(crpix),
+        SVector{naxis, Float64}(crval),
+        SMatrix{naxis, naxis, Float64, naxis * naxis}(cd),
         ctype, cunit,
         lonpole, latpole, alpha_p, delta_p,
         projection, pipeline, aux, lon_axis, lat_axis,
