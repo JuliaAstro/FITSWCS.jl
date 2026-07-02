@@ -5,6 +5,46 @@ The Simple Imaging Polynomial convention represents image-plane distortion as
 polynomial offsets in pixel coordinates relative to `CRPIX1` and `CRPIX2`.
 """
 
+"""
+    SIPDistortion
+
+Simple Imaging Polynomial distortion model.
+
+SIP applies only to the first two pixel axes.  The forward coefficients `a`
+and `b` map detector pixel coordinates to focal/image-plane pixel coordinates.
+The optional inverse coefficients `ap` and `bp` map focal/image-plane
+coordinates back to detector pixel coordinates.
+"""
+struct SIPDistortion
+    crpix::SVector{2, Float64}
+    a::Matrix{Float64}
+    b::Matrix{Float64}
+    ap::Union{Nothing, Matrix{Float64}}
+    bp::Union{Nothing, Matrix{Float64}}
+end
+
+# ──────────────────────────────────────────────────────────────────────────────
+
+"""Abstract supertype for pre-linear pixel/focal-plane distortion pipelines."""
+abstract type AbstractDistortionPipeline end
+
+"""Identity distortion pipeline for WCS transforms with no pre-linear distortion."""
+struct NoDistortionPipeline <: AbstractDistortionPipeline end
+
+"""
+    DistortionPipeline
+
+Pre-linear distortion pipeline.  The current implementation uses the `sip`
+field; `det2im` and `cpdis` are reserved for Paper IV lookup-table stages.
+"""
+struct DistortionPipeline{S <: Union{Nothing, SIPDistortion}, D, C} <: AbstractDistortionPipeline
+    det2im::NTuple{2, Union{Nothing, D}}
+    sip::S
+    cpdis::NTuple{2, Union{Nothing, C}}
+end
+
+DistortionPipeline(sip::SIPDistortion) =
+    DistortionPipeline{typeof(sip), Nothing, Nothing}((nothing, nothing), sip, (nothing, nothing))
 
 function has_sip_keywords(header::AbstractDict, alt_str::AbstractString)
     # Detect any SIP order keyword for this WCS version.
@@ -14,7 +54,7 @@ function has_sip_keywords(header::AbstractDict, alt_str::AbstractString)
     return false
 end
 
-function is_lookup_distortion_keyword(key::AbstractString, alt_str::AbstractString="")
+function is_lookup_distortion_keyword(key::AbstractString, alt_str::AbstractString = "")
     ukey = uppercase(String(key))
     suffix = uppercase(String(alt_str))
 
@@ -30,22 +70,19 @@ function is_lookup_distortion_keyword(key::AbstractString, alt_str::AbstractStri
     return false
 end
 
-function reject_lookup_distortion_keywords(header::AbstractDict, alt_str::AbstractString="")
+function reject_lookup_distortion_keywords(header::AbstractDict, alt_str::AbstractString = "")
     # Lookup-table distortions affect only the selected WCS version's pixel pipeline.
     for key in keys(header)
         key isa AbstractString || continue
         if is_lookup_distortion_keyword(key, alt_str)
-            throw(ArgumentError(
-                "distortion lookup keyword $key is not implemented yet"
-            ))
+            throw(ArgumentError("distortion lookup keyword $key is not implemented yet"))
         end
     end
 
     return nothing
 end
 
-function read_sip_matrix(header::AbstractDict, prefix::AbstractString,
-                          order::Int, alt_str::AbstractString)
+function read_sip_matrix(header::AbstractDict, prefix::AbstractString, order::Int, alt_str::AbstractString)
     coeff = zeros(Float64, order + 1, order + 1)
 
     # Fill only the triangular coefficient region defined by total order.
@@ -59,8 +96,7 @@ function read_sip_matrix(header::AbstractDict, prefix::AbstractString,
     return coeff
 end
 
-function parse_sip_distortion(header::AbstractDict, crpix::Vector{Float64},
-                               naxis::Int, alt::Char)
+function parse_sip_distortion(header::AbstractDict, crpix::Vector{Float64}, naxis::Int, alt::Char)
     alt_str = alt == ' ' ? "" : string(alt)
     has_sip_keywords(header, alt_str) || return nothing
 
@@ -98,7 +134,7 @@ function parse_sip_distortion(header::AbstractDict, crpix::Vector{Float64},
         bp = read_sip_matrix(header, "BP", bp_order, alt_str)
     end
 
-    return SIPDistortion(SVector{2,Float64}(crpix[1:2]), a, b, ap, bp)
+    return SIPDistortion(SVector{2, Float64}(crpix[1:2]), a, b, ap, bp)
 end
 
 distortion_pipeline(::Nothing) = NoDistortionPipeline()
@@ -132,7 +168,7 @@ function sip_pixel_to_focal(sip::SIPDistortion, pixel::AbstractVector)
     fx = pixel[1] + evaluate_sip_polynomial(sip.a, u, v)
     fy = pixel[2] + evaluate_sip_polynomial(sip.b, u, v)
 
-    return SVector{2,_coordinate_float_type(pixel)}(fx, fy)
+    return SVector{2, _coordinate_float_type(pixel)}(fx, fy)
 end
 
 function sip_focal_to_pixel(sip::SIPDistortion, focal::AbstractVector)
@@ -146,14 +182,14 @@ function sip_focal_to_pixel(sip::SIPDistortion, focal::AbstractVector)
         v = focal[2] - sip.crpix[2]
         px = focal[1] + evaluate_sip_polynomial(sip.ap, u, v)
         py = focal[2] + evaluate_sip_polynomial(sip.bp, u, v)
-        return SVector{2,T}(px, py)
+        return SVector{2, T}(px, py)
     end
 
     # Otherwise solve forward(pixel) = focal with a fixed-point correction.
     # TODO: add a keyword argument (e.g. `error::Bool = false`) that raises
     # a `NoConvergence`-style exception carrying the best solution.
-    pixel = SVector{2,T}(T(focal[1]), T(focal[2]))  # initial guess
-    target = SVector{2,T}(T(focal[1]), T(focal[2]))
+    pixel = SVector{2, T}(T(focal[1]), T(focal[2]))  # initial guess
+    target = SVector{2, T}(T(focal[1]), T(focal[2]))
     max_iter = 64
     tol = 1e-10
     prev_r = Inf
@@ -163,7 +199,7 @@ function sip_focal_to_pixel(sip::SIPDistortion, focal::AbstractVector)
         corrected = sip_pixel_to_focal(sip, pixel)
         dx = corrected[1] - target[1]
         dy = corrected[2] - target[2]
-        pixel = SVector{2,T}(pixel[1] - dx, pixel[2] - dy)
+        pixel = SVector{2, T}(pixel[1] - dx, pixel[2] - dy)
         r = hypot(dx, dy)
         r <= tol && return pixel
 
@@ -171,8 +207,8 @@ function sip_focal_to_pixel(sip::SIPDistortion, focal::AbstractVector)
             div_count += 1
             if div_count >= 3
                 @warn "SIP inverse is diverging at iteration $k " *
-                      "(residual $prev_r → $r > tolerance $tol); " *
-                      "returning best estimate so far"
+                    "(residual $prev_r → $r > tolerance $tol); " *
+                    "returning best estimate so far"
                 return pixel
             end
         else
@@ -182,9 +218,9 @@ function sip_focal_to_pixel(sip::SIPDistortion, focal::AbstractVector)
     end
 
     @warn "SIP inverse failed to converge after $max_iter iterations " *
-          "(final residual $prev_r > tolerance $tol); " *
-          "returning best estimate"
-    return SVector{2,T}(pixel)
+        "(final residual $prev_r > tolerance $tol); " *
+        "returning best estimate"
+    return SVector{2, T}(pixel)
 end
 
 function pixel_to_focal(::NoDistortionPipeline, pixel::AbstractVector, ::Val{N}) where {N}
@@ -193,7 +229,7 @@ function pixel_to_focal(::NoDistortionPipeline, pixel::AbstractVector, ::Val{N})
 
     # Materialize the identity focal coordinate in stable static storage.
     T = _coordinate_float_type(pixel)
-    return SVector{N,T}(ntuple(i -> T(pixel[i]), N))
+    return SVector{N, T}(ntuple(i -> T(pixel[i]), N))
 end
 
 function pixel_to_focal(::NoDistortionPipeline, pixel::StaticVector{N}, ::Val{N}) where {N}
@@ -208,7 +244,7 @@ function pixel_to_focal(pipeline::DistortionPipeline, pixel::AbstractVector, ::V
     # Preserve identity behavior for future non-SIP pipeline variants.
     T = _coordinate_float_type(pixel)
     if pipeline.sip === nothing
-        return SVector{N,T}(ntuple(i -> T(pixel[i]), N))
+        return SVector{N, T}(ntuple(i -> T(pixel[i]), N))
     end
 
     # Apply the SIP stage; axes outside the two SIP axes pass through unchanged.
@@ -225,7 +261,7 @@ function focal_to_pixel(::NoDistortionPipeline, focal::AbstractVector, ::Val{N})
 
     # Materialize the identity pixel coordinate in stable static storage.
     T = _coordinate_float_type(focal)
-    return SVector{N,T}(ntuple(i -> T(focal[i]), N))
+    return SVector{N, T}(ntuple(i -> T(focal[i]), N))
 end
 
 function focal_to_pixel(::NoDistortionPipeline, focal::StaticVector{N}, ::Val{N}) where {N}
@@ -240,7 +276,7 @@ function focal_to_pixel(pipeline::DistortionPipeline, focal::AbstractVector, ::V
     # Preserve identity behavior for future non-SIP pipeline variants.
     T = _coordinate_float_type(focal)
     if pipeline.sip === nothing
-        return SVector{N,T}(ntuple(i -> T(focal[i]), N))
+        return SVector{N, T}(ntuple(i -> T(focal[i]), N))
     end
 
     # Invert the SIP stage; full pipeline inversion will extend this.

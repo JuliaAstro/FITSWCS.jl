@@ -11,6 +11,355 @@ in **degrees**.  This matches the FITS WCS Paper II convention.
   FITS", Astronomy & Astrophysics, 395, 1077–1122.  (Paper II)
 """
 
+"""
+    AbstractProjection
+
+Supertype for all FITS WCS spherical projections.  Each concrete subtype
+represents one projection algorithm as defined in Calabretta & Greisen (2002),
+Paper II.
+"""
+abstract type AbstractProjection end
+
+# ── Zenithal (azimuthal) projections ──────────────────────────────────────────
+
+"""    AZP
+
+Zenithal perspective projection.  FITS projection code `AZP`.
+
+Parameters: `mu` (PV<lat>_1, distance from sphere center, default 0),
+`gamma` (PV<lat>_2, tilt angle in degrees, default 0).
+When both are zero the projection degenerates to TAN (gnomonic).
+
+Paper II, Eq. 25–27.
+"""
+struct AZP <: AbstractProjection
+    mu::Float64
+    gamma::Float64
+end
+AZP() = AZP(0.0, 0.0)
+
+"""    SZP
+
+Slant zenithal perspective projection.  FITS projection code `SZP`.
+
+Parameters: `mu` (PV<lat>_1, distance from sphere center, default 0),
+`phi_c` (PV<lat>_2, native longitude of slant, default 0),
+`theta_c` (PV<lat>_3, native latitude of slant, default 90).
+
+Paper II, Eq. 31–33.
+"""
+struct SZP <: AbstractProjection
+    mu::Float64
+    phi_c::Float64
+    theta_c::Float64
+end
+SZP() = SZP(0.0, 0.0, 90.0)
+
+"""    TAN
+
+Gnomonic (tangent-plane) projection.  FITS projection code `TAN`.
+Paper II, Eq. 54–55.
+"""
+struct TAN <: AbstractProjection end
+
+"""    SIN
+
+Slant orthographic projection.  FITS projection code `SIN`.
+Paper II, Eq. 48.  The standard (non-slant) form has projection parameters
+ξ = η = 0.
+"""
+struct SIN <: AbstractProjection
+    xi::Float64    # PV2_1; default 0
+    eta::Float64   # PV2_2; default 0
+end
+SIN() = SIN(0.0, 0.0)
+
+"""    STG
+
+Stereographic projection.  FITS projection code `STG`.
+Paper II, Eq. 50.
+"""
+struct STG <: AbstractProjection end
+
+"""    ARC
+
+Zenithal equidistant projection.  FITS projection code `ARC`.
+Paper II, Eq. 46.
+"""
+struct ARC <: AbstractProjection end
+
+"""    ZEA
+
+Lambert zenithal equal-area projection.  FITS projection code `ZEA`.
+Paper II, Eq. 52.
+"""
+struct ZEA <: AbstractProjection end
+
+# ── Cylindrical projections ───────────────────────────────────────────────────
+
+"""    CAR
+
+Plate carrée (equirectangular) projection.  FITS projection code `CAR`.
+Paper II, Eq. 84.  Native longitude/latitude map linearly to x/y.
+"""
+struct CAR <: AbstractProjection end
+
+"""    CEA
+
+Cylindrical equal-area projection.  FITS projection code `CEA`.
+The `lambda` parameter is read from `PV<lat>_1` and defaults to 1.
+"""
+struct CEA <: AbstractProjection
+    lambda::Float64
+end
+CEA() = CEA(1.0)
+
+"""    CYP
+
+Cylindrical perspective projection.  FITS projection code `CYP`.
+Parameters `lambda` and `mu` are read from `PV<lat>_1` and `PV<lat>_2`.
+"""
+struct CYP <: AbstractProjection
+    lambda::Float64
+    mu::Float64
+end
+CYP() = CYP(1.0, 1.0)
+
+"""    MER
+
+Mercator projection.  FITS projection code `MER`.
+"""
+struct MER <: AbstractProjection end
+
+# ── Pseudo-cylindrical projections ────────────────────────────────────────────
+
+"""    SFL
+
+Sanson-Flamsteed projection.  FITS projection code `SFL`.
+"""
+struct SFL <: AbstractProjection end
+
+"""    PAR
+
+Parabolic projection.  FITS projection code `PAR`.
+"""
+struct PAR <: AbstractProjection end
+
+"""    MOL
+
+Mollweide projection.  FITS projection code `MOL`.
+"""
+struct MOL <: AbstractProjection end
+
+"""    PCO
+
+Polyconic projection.  FITS projection code `PCO`.
+"""
+struct PCO <: AbstractProjection end
+
+"""    AIT
+
+Hammer-Aitoff projection.  FITS projection code `AIT`.
+Paper II, Eq. 75.
+"""
+struct AIT <: AbstractProjection end
+
+# ── Zenithal polynomial projections ───────────────────────────────────────────
+
+"""    ZPN
+
+Zenithal/azimuthal polynomial projection.  FITS projection code `ZPN`.
+
+The native radius is a polynomial in the colatitude `zd = π/2 − θ` (radians):
+
+    r = Σ pv[m] * zd^m   (m = 0, 1, ..., N)
+
+The polynomial coefficients are supplied through the PV header keywords
+`PVlat_0`, `PVlat_1`, ... on the latitude-like axis.  The default
+(coefficients all zero) projects to the origin for all sky directions.
+
+Paper II, Eq. 55.
+"""
+struct ZPN <: AbstractProjection
+    pv::Vector{Float64}   # polynomial coefficients pv[1] ≡ PV_0, pv[2] ≡ PV_1, ...
+end
+ZPN() = ZPN([0.0, 1.0])  # linear r = zd default (same as ARC)
+
+"""    AIR
+
+Airy projection.  FITS projection code `AIR`.
+
+`theta_b` is the break latitude (degrees) at which the projection is zero;
+default is 90°.
+
+Paper II, Section 5.5, Eq. 30–31.
+"""
+struct AIR <: AbstractProjection
+    theta_b::Float64   # break latitude in degrees
+end
+AIR() = AIR(90.0)
+
+# ── Conic projections ──────────────────────────────────────────────────────────
+
+"""    COP
+
+Conic perspective projection.  FITS projection code `COP`.
+
+Parameters `sigma` (PVlat_1) and `delta` (PVlat_2) define the cone aperture.
+Both are in degrees.
+
+Paper II, Section 6.1.
+"""
+struct COP <: AbstractProjection
+    sigma::Float64   # degrees; native standard parallel
+    delta::Float64   # degrees; half-opening angle
+end
+
+"""    COD
+
+Conic equidistant projection.  FITS projection code `COD`.
+
+Parameters `sigma` (PVlat_1) and `delta` (PVlat_2) in degrees.
+
+Paper II, Section 6.2.
+"""
+struct COD <: AbstractProjection
+    sigma::Float64
+    delta::Float64
+end
+
+"""    COE
+
+Conic equal-area projection.  FITS projection code `COE`.
+
+Parameters `sigma` (PVlat_1) and `delta` (PVlat_2) in degrees.
+
+Paper II, Section 6.3.
+"""
+struct COE <: AbstractProjection
+    sigma::Float64
+    delta::Float64
+end
+
+"""    COO
+
+Conic orthomorphic projection.  FITS projection code `COO`.
+
+Parameters `sigma` (PVlat_1) and `delta` (PVlat_2) in degrees.
+
+Paper II, Section 6.4.
+"""
+struct COO <: AbstractProjection
+    sigma::Float64
+    delta::Float64
+end
+
+"""    BON
+
+Bonne's projection.  FITS projection code `BON`.
+
+`theta1` (PVlat_1) is the standard parallel in degrees.
+When `theta1 == 0`, the projection degenerates to SFL (Sanson-Flamsteed).
+
+Paper II, Section 7.4, Eq. 70.
+"""
+struct BON <: AbstractProjection
+    theta1::Float64   # degrees
+end
+
+# ── Quadrilateralized spherical cube projections ───────────────────────────────
+
+"""    TSC
+
+Tangential spherical cube projection.  FITS projection code `TSC`.
+
+Paper II, Section 8.1.
+"""
+struct TSC <: AbstractProjection end
+
+"""    CSC
+
+COBE quadrilateralized spherical cube projection.  FITS projection code `CSC`.
+
+Paper II, Section 8.2.
+"""
+struct CSC <: AbstractProjection end
+
+"""    QSC
+
+Quadrilateralized spherical cube projection.  FITS projection code `QSC`.
+
+Paper II, Section 8.3.
+"""
+struct QSC <: AbstractProjection end
+
+# ── HEALPix projections ────────────────────────────────────────────────────────
+
+"""    HPX
+
+HEALPix projection.  FITS projection code `HPX`.
+
+Parameters `H` (PVlat_1, default 4) and `K` (PVlat_2, default 3) define the
+partition of the sphere.
+
+Calabretta & Roukema (2007).
+"""
+struct HPX <: AbstractProjection
+    H::Int   # number of facets around the equatorial zone
+    K::Int   # number of facets in each polar cap
+end
+HPX() = HPX(4, 3)
+
+"""    XPH
+
+HEALPix polar cap projection (rotated HPX).  FITS projection code `XPH`.
+
+Calabretta & Roukema (2007).
+"""
+struct XPH <: AbstractProjection end
+
+# ── TPV / TPD ──────────────────────────────────────────────────────────────────
+
+"""    TPV
+
+TAN projection with sequent polynomial distortion (SCAMP convention).
+
+TPV is not a fundamental projection; it is a TAN (gnomonic) projection combined
+with a sequent polynomial distortion whose coefficients are stored in FITS
+`PVi_m` keywords.  The polynomial operates on intermediate world coordinates
+(x, y) in degrees **after** the CD matrix, using the TPD coefficient indexing
+convention.
+
+Coefficients are stored in **direct** form (wcslib convention): the polynomial
+returns the corrected coordinate directly.  The identity polynomial is
+``xcoeff = [0, 1]`` (i.e. ``x' = x``) and ``ycoeff = [0, 0, 1]`` (``y' = y``).
+
+The CTYPE projection codes `TPV` and `TPD` both map to this type.
+
+# Fields
+- `xcoeff` – ``PV_{lon\\_axis,m}`` coefficients (direct form)
+- `ycoeff` – ``PV_{lat\\_axis,m}`` coefficients (direct form)
+"""
+struct TPV <: AbstractProjection
+    xcoeff::Vector{Float64}
+    ycoeff::Vector{Float64}
+end
+
+# Default is identity polynomial (= plain TAN).  x' = 1·x, y' = 1·y.
+TPV() = TPV(Float64[0.0, 1.0], Float64[0.0, 0.0, 1.0])
+
+# ── Unknown / deferred ────────────────────────────────────────────────────────
+
+"""    UnknownProjection
+
+Placeholder for projection codes that are parsed from a FITS header but not
+yet implemented.  Attempting a coordinate transform with this projection raises
+an informative error.
+"""
+struct UnknownProjection <: AbstractProjection
+    code::String
+end
+
 # ──────────────────────────────────────────────────────────────────────────────
 # TPD coefficient-to-term mapping (used by TPV, TPD, and SCAMP)
 # ──────────────────────────────────────────────────────────────────────────────
@@ -37,7 +386,7 @@ radial ``r^d`` term.  The table is sized for 60 entries (TPD limit; TPV uses
 only the first 40).
 """
 const _TPD_TERMS = let
-    terms = Tuple{Symbol,Vararg{Int}}[]
+    terms = Tuple{Symbol, Vararg{Int}}[]
     max_terms = 60
     d = 0
     while length(terms) < max_terms
@@ -218,9 +567,9 @@ function intermediate_to_native(proj::AZP, x::Real, y::Real)
     w = _azp_derived(T(proj.mu), T(proj.gamma))
     xj = T(x)
     yj = T(y)
-    yc  = yj * w.w3
+    yc = yj * w.w3
     yc2 = yc^2
-    q   = w.w0 + yj * w.w4
+    q = w.w0 + yj * w.w4
 
     r = hypot(xj, yc)
     if iszero(r)
@@ -258,7 +607,7 @@ function native_to_intermediate(proj::AZP, phi::Real, theta::Real)
     w = _azp_derived(mu, T(proj.gamma))
 
     sinphi, cosphi = sincos(phi)
-    sinth, costh  = sincos(theta)
+    sinth, costh = sincos(theta)
 
     s = w.w1 * cosphi
     t = (mu + sinth) + costh * s
@@ -267,7 +616,7 @@ function native_to_intermediate(proj::AZP, phi::Real, theta::Real)
     end
     r = w.w0 * costh / t
 
-    x =  r * sinphi
+    x = r * sinphi
     y = -r * cosphi * w.w2
     return x, y
 end
@@ -281,7 +630,7 @@ function _szp_derived(mu::T, phi_c_deg::T, theta_c_deg::T) where {T <: Real}
     w3 = mu * sind(theta_c_deg) + 1
     w3 == 0 && error("SZP: μ must satisfy μ*sin(θ_c) + 1 ≠ 0")
     w1 = -mu * cosd(theta_c_deg) * sind(phi_c_deg)    # xp
-    w2 =  mu * cosd(theta_c_deg) * cosd(phi_c_deg)    # yp
+    w2 = mu * cosd(theta_c_deg) * cosd(phi_c_deg)    # yp
     w4 = rad2deg(w1) # r0*xp
     w5 = rad2deg(w2) # r0*yp
     w6 = rad2deg(w3) # r0*zp
@@ -306,17 +655,17 @@ function intermediate_to_native(proj::SZP, x::Real, y::Real)
 
     x1 = (xr - w.w1) / w.w3
     y1 = (yr - w.w2) / w.w3
-    xy = xr*x1 + yr*y1
+    xy = xr * x1 + yr * y1
 
     if r2 < _boundary_tol(T) # wcslib tolerance is 1e-10
-        z   = r2 / 2
+        z = r2 / 2
         theta = _halfpi(T) - rad2deg(sqrt(r2 / (1 + xy)))
     else
         t = x1^2 + y1^2
         a = t + 1
         b = xy - t
         c = r2 - xy - xy + t - 1
-        d = b^2 - a*c
+        d = b^2 - a * c
         if d < 0
             return zero(T), zero(T)   # no solution
         end
@@ -325,11 +674,16 @@ function intermediate_to_native(proj::SZP, x::Real, y::Real)
         sth2 = (-b - d) / a
         sth = sth1 > sth2 ? sth1 : sth2
         if sth > 1
-            if sth - 1 < tol; sth = one(T)
-            else; sth = sth1 < sth2 ? sth1 : sth2; end
+            if sth - 1 < tol
+                sth = one(T)
+            else
+                sth = sth1 < sth2 ? sth1 : sth2
+            end
         end
         if sth < -1
-            if sth + 1 > -tol; sth = -one(T); end
+            if sth + 1 > -tol
+                sth = -one(T)
+            end
         end
         if sth > 1 || sth < -1
             return zero(T), zero(T)
@@ -338,8 +692,8 @@ function intermediate_to_native(proj::SZP, x::Real, y::Real)
         z = 1 - sth
     end
 
-    dx = xr - x1*z
-    dy = yr - y1*z
+    dx = xr - x1 * z
+    dy = yr - y1 * z
     phi = (iszero(dx) && iszero(dy)) ? zero(T) : atan(dx, -dy)
     return phi, theta
 end
@@ -365,7 +719,7 @@ function native_to_intermediate(proj::SZP, phi::Real, theta::Real)
     u = w.w4 * s / t
     v = w.w5 * s / t
 
-    x =  r * sinphi - u
+    x = r * sinphi - u
     y = -r * cosphi - v
     return x, y
 end
@@ -446,7 +800,7 @@ this is straightforward.  The slant form solves a quadratic.
 """
 function intermediate_to_native(sin_proj::SIN, x::Real, y::Real)
     T = _promote_float_type(x, y)
-    xi  = T(sin_proj.xi)
+    xi = T(sin_proj.xi)
     eta = T(sin_proj.eta)
 
     # Convert x, y to radians (projection formulas use dimensionless coords)
@@ -467,9 +821,9 @@ function intermediate_to_native(sin_proj::SIN, x::Real, y::Real)
     else
         # Slant SIN: solve quadratic (Paper II, Eq. 49)
         a = xi^2 + eta^2 + 1
-        b = xi*(xr - xi) + eta*(yr - eta)
+        b = xi * (xr - xi) + eta * (yr - eta)
         c = (xr - xi)^2 + (yr - eta)^2 - 1
-        disc = b^2 - a*c
+        disc = b^2 - a * c
         if disc < 0
             error("SIN projection: point outside valid domain (discriminant < 0)")
         end
@@ -483,7 +837,7 @@ function intermediate_to_native(sin_proj::SIN, x::Real, y::Real)
         end
         theta = asin(sth)
         offset = 1 - sth
-        phi = atan(xr - xi*offset, -(yr - eta*offset))
+        phi = atan(xr - xi * offset, -(yr - eta * offset))
     end
     return phi, theta
 end
@@ -499,7 +853,7 @@ function native_to_intermediate(sin_proj::SIN, phi::Real, theta::Real)
     cth = cos(theta)
     sth = sin(theta)
     # Result in radians, then convert to degrees
-    xr = cth * sin(phi) + xi  * (1 - sth)
+    xr = cth * sin(phi) + xi * (1 - sth)
     yr = -cth * cos(phi) + eta * (1 - sth)
     return rad2deg(xr), rad2deg(yr)
 end
@@ -687,7 +1041,7 @@ Inverse CYP projection.  `lambda` and `mu` are projection parameters.
 function intermediate_to_native(proj::CYP, x::Real, y::Real)
     T = _promote_float_type(x, y)
     lam = T(proj.lambda)
-    mu  = T(proj.mu)
+    mu = T(proj.mu)
 
     # WCSLIB 8.9 cypx2s: phi_rad = (x / mu) * D2R  (w[1] = 1/mu, x0=0).
     phi = deg2rad(x) / mu
@@ -706,7 +1060,7 @@ Forward CYP projection.
 function native_to_intermediate(proj::CYP, phi::Real, theta::Real)
     T = _promote_float_type(phi, theta)
     lam = T(proj.lambda)
-    mu  = T(proj.mu)
+    mu = T(proj.mu)
 
     # WCSLIB 8.9 cyps2x: x = mu * phi_deg  (w[0] = mu, x0=0).
     phi_w = _wrap_native_phi(phi)
@@ -744,7 +1098,7 @@ Forward MER projection.
 function native_to_intermediate(::MER, phi::Real, theta::Real)
     T = _promote_float_type(phi, theta)
     # Mercator is singular at the native poles.
-    abs(abs(theta) - π/2) > _convergence_tol(Float64) ||
+    abs(abs(theta) - π / 2) > _convergence_tol(Float64) ||
         error("MER projection: singularity at theta = ±90°")
     phi_w = _wrap_native_phi(phi)
     x = rad2deg(phi_w)
@@ -1027,7 +1381,7 @@ function intermediate_to_native(::AIT, x::Real, y::Real)
     end
     sinP2 = u / (2 * g * cosT)
     cosP2 = z^2 / cosT
-    phi   = 2 * atan(sinP2, cosP2)
+    phi = 2 * atan(sinP2, cosP2)
     return phi, theta
 end
 
@@ -1111,14 +1465,14 @@ function intermediate_to_native(proj::ZPN, x::Real, y::Real)
             abs(b) > _convergence_tol(T) || error("ZPN projection: degenerate polynomial")
             zd = -c / b
         else
-            disc = b^2 - 4*a*c
+            disc = b^2 - 4 * a * c
             # wcslib tolerance is 1e-14
             disc >= -_convergence_tol(T) || error("ZPN projection: point outside valid domain")
             disc = max(zero(T), disc)
             sqrt_disc = sqrt(disc)
             # Pick the smaller non-negative root (closest to the projection center).
-            zd1 = (-b + sqrt_disc) / (2*a)
-            zd2 = (-b - sqrt_disc) / (2*a)
+            zd1 = (-b + sqrt_disc) / (2 * a)
+            zd2 = (-b - sqrt_disc) / (2 * a)
             if zd1 >= 0 && (zd1 <= zd2 || zd2 < 0)
                 zd = zd1
             else
@@ -1145,7 +1499,7 @@ function intermediate_to_native(proj::ZPN, x::Real, y::Real)
 
     # Find the first maximum of P (where P' turns negative) as the
     # upper limit.  The closest root to zd=0 is in [0, zd_max].
-    dpv = [T(k) * T(pv[k+1]) for k in 1:npv-1]
+    dpv = [T(k) * T(pv[k + 1]) for k in 1:(npv - 1)]
     _dpoly(z) = evalpoly(z, dpv)
     zd_max = _pi(T)
 
@@ -1187,7 +1541,7 @@ function intermediate_to_native(proj::ZPN, x::Real, y::Real)
     pa * pb > 0 && error("ZPN projection: point outside the valid domain of the polynomial")
 
     for _ in 1:64
-        m  = (a + b) / 2
+        m = (a + b) / 2
         pm = zfn(m)
         if abs(pm) < _convergence_tol(T) # wcslib tolerance is 1e-15
             zd = m
@@ -1288,7 +1642,7 @@ function intermediate_to_native(proj::AIR, x::Real, y::Real)
     a, b = zero(T), _halfpi(T) * (1 - T(1e-10))
 
     for _ in 1:64
-        m  = (a + b) / 2
+        m = (a + b) / 2
         cos_m = cos(m)
         sin_m = sin(m)
         # wcslib tolerance is 1e-15
@@ -1465,7 +1819,7 @@ function intermediate_to_native(proj::COD, x::Real, y::Real)
 
     r_deg, alpha_rad = _conic_xy_to_r_alpha(T(x), T(y), Y0_deg, sigma_rad)
 
-    phi   = alpha_rad / C
+    phi = alpha_rad / C
     theta = sigma_rad + delta_rad - deg2rad(r_deg) / (R2D / R2D)
     # Simplify: theta_rad = sigma_rad + delta_rad * (...) is the COD form.
     # From wcslib: theta = w3 - r; w3 = Y0_d + sigma_d (both in degrees)
@@ -1617,7 +1971,7 @@ function intermediate_to_native(proj::COO, x::Real, y::Real)
 
     tau1 = (_halfpi(T) - theta1_rad) / 2
     tan1 = tan(tau1)
-    psi  = R2D * cos(theta1_rad) / (C * tan1^C)
+    psi = R2D * cos(theta1_rad) / (C * tan1^C)
     Y0_deg = psi * tan((_halfpi(T) - sigma_rad) / 2)^C
 
     r_deg, alpha_rad = _conic_xy_to_r_alpha(T(x), T(y), Y0_deg, sigma_rad)
@@ -1657,7 +2011,7 @@ function native_to_intermediate(proj::COO, phi::Real, theta::Real)
 
     tau1 = (_halfpi(T) - theta1_rad) / 2
     tan1 = tan(tau1)
-    psi  = R2D * cos(theta1_rad) / (C * tan1^C)
+    psi = R2D * cos(theta1_rad) / (C * tan1^C)
     Y0_deg = psi * tan((_halfpi(T) - sigma_rad) / 2)^C
 
     alpha_rad = C * _wrap_native_phi(phi)
@@ -1704,7 +2058,7 @@ function intermediate_to_native(proj::BON, x::Real, y::Real)
 
     # wcslib bonx2s: dy = w[2] - (y + prj->y0) with prj->y0=0 → dy = Y0_deg - y.
     dy = Y0_deg - y
-    r  = hypot(x, dy)
+    r = hypot(x, dy)
     theta1 < 0 && (r = -r)
 
     alpha_rad = atan(x, dy)
@@ -1742,7 +2096,7 @@ function native_to_intermediate(proj::BON, phi::Real, theta::Real)
     theta1_rad = deg2rad(theta1)
 
     Y0_deg = R2D * (cos(theta1_rad) / sin(theta1_rad) + theta1_rad)
-    r_deg  = Y0_deg - rad2deg(theta)
+    r_deg = Y0_deg - rad2deg(theta)
 
     # alpha_rad = R2D * phi_rad * cos(theta) / r_deg
     # Derived from wcslib bons2x: s = r0*phi_deg; alpha_deg = s*cos(theta)/r_deg;
@@ -1795,29 +2149,39 @@ const _FACE_Y0U = (2.0, 0.0, 0.0, 0.0, 0.0, -2.0)
 function _xyz_to_cube_face(l::T, m::T, n::T) where {T <: Real}
     face = 0
     zeta = n
-    if l > zeta; face = 1; zeta = l; end
-    if m > zeta; face = 2; zeta = m; end
-    if -l > zeta; face = 3; zeta = -l; end
-    if -m > zeta; face = 4; zeta = -m; end
-    if -n > zeta; face = 5; zeta = -n; end
+    if l > zeta
+        face = 1; zeta = l
+    end
+    if m > zeta
+        face = 2; zeta = m
+    end
+    if -l > zeta
+        face = 3; zeta = -l
+    end
+    if -m > zeta
+        face = 4; zeta = -m
+    end
+    if -n > zeta
+        face = 5; zeta = -n
+    end
 
     if face == 1
-        xf =  m / zeta
-        yf =  n / zeta
+        xf = m / zeta
+        yf = n / zeta
     elseif face == 2
         xf = -l / zeta
-        yf =  n / zeta
+        yf = n / zeta
     elseif face == 3
         xf = -m / zeta
-        yf =  n / zeta
+        yf = n / zeta
     elseif face == 4
-        xf =  l / zeta
-        yf =  n / zeta
+        xf = l / zeta
+        yf = n / zeta
     elseif face == 5
-        xf =  m / zeta
-        yf =  l / zeta
+        xf = m / zeta
+        yf = l / zeta
     else  # face == 0
-        xf =  m / zeta
+        xf = m / zeta
         yf = -l / zeta
     end
     return face, xf, yf
@@ -1827,17 +2191,17 @@ end
 # WCSLIB 8.9 inverse face-to-sphere (tscx2s, cscx2s, qscx2s).
 function _face_to_uvec(face::Int, xf::T, yf::T) where {T <: Real}
     if face == 1
-        l =  one(T); m =  xf;     n =  yf
+        l = one(T); m = xf;     n = yf
     elseif face == 2
-        l = -xf;     m =  one(T); n =  yf
+        l = -xf;     m = one(T); n = yf
     elseif face == 3
-        l = -one(T); m = -xf;     n =  yf
+        l = -one(T); m = -xf;     n = yf
     elseif face == 4
-        l =  xf;     m = -one(T); n =  yf
+        l = xf;     m = -one(T); n = yf
     elseif face == 5
-        l =  yf;     m = -xf;     n = -one(T)
+        l = yf;     m = -xf;     n = -one(T)
     else  # face == 0
-        l = -yf;     m =  xf;     n =  one(T)
+        l = -yf;     m = xf;     n = one(T)
     end
     r = hypot(l, m, n)
     return l / r, m / r, n / r
@@ -1852,7 +2216,9 @@ function _cube_xy_to_face(x_deg::T, y_deg::T, scale::T) where {T <: Real}
     yf = y_deg / scale
 
     # Handle negative face wrapping (xf < -1 → add 8 face units).
-    if xf < -one(T); xf += T(8); end
+    if xf < -one(T)
+        xf += T(8)
+    end
 
     if yf > one(T) + TOL
         face = 0; yf -= T(2)
@@ -2037,7 +2403,7 @@ function intermediate_to_native(::CSC, x::Real, y::Real)
     xf = _csc_inv_axis(chi, psi)
     yf = _csc_inv_axis(psi, chi)
     l, m, n = _face_to_uvec(face, xf, yf)
-    phi   = atan(m, l)
+    phi = atan(m, l)
     theta = asin(clamp(n, -one(T), one(T)))
     return phi, theta
 end
@@ -2049,24 +2415,24 @@ function _qsc_forward(xi::T, eta::T, zeco::T, zeta::T) where {T <: Real}
     if xi != 0 || eta != 0
         if -xi > abs(eta)
             omega = eta / xi
-            tau   = one(T) + omega^2
-            xf    = -sqrt(zeco / (one(T) - one(T) / sqrt(one(T) + tau)))
-            yf    = (xf / 15) * (atand(omega) - asind(omega / sqrt(2 * tau)))
+            tau = one(T) + omega^2
+            xf = -sqrt(zeco / (one(T) - one(T) / sqrt(one(T) + tau)))
+            yf = (xf / 15) * (atand(omega) - asind(omega / sqrt(2 * tau)))
         elseif xi > abs(eta)
             omega = eta / xi
-            tau   = one(T) + omega^2
-            xf    = sqrt(zeco / (one(T) - one(T) / sqrt(one(T) + tau)))
-            yf    = (xf / 15) * (atand(omega) - asind(omega / sqrt(2 * tau)))
+            tau = one(T) + omega^2
+            xf = sqrt(zeco / (one(T) - one(T) / sqrt(one(T) + tau)))
+            yf = (xf / 15) * (atand(omega) - asind(omega / sqrt(2 * tau)))
         elseif -eta >= abs(xi)
             omega = xi / eta
-            tau   = one(T) + omega^2
-            yf    = -sqrt(zeco / (one(T) - one(T) / sqrt(one(T) + tau)))
-            xf    = (yf / 15) * (atand(omega) - asind(omega / sqrt(2 * tau)))
+            tau = one(T) + omega^2
+            yf = -sqrt(zeco / (one(T) - one(T) / sqrt(one(T) + tau)))
+            xf = (yf / 15) * (atand(omega) - asind(omega / sqrt(2 * tau)))
         elseif eta >= abs(xi)
             omega = xi / eta
-            tau   = one(T) + omega^2
-            yf    = sqrt(zeco / (one(T) - one(T) / sqrt(one(T) + tau)))
-            xf    = (yf / 15) * (atand(omega) - asind(omega / sqrt(2 * tau)))
+            tau = one(T) + omega^2
+            yf = sqrt(zeco / (one(T) - one(T) / sqrt(one(T) + tau)))
+            xf = (yf / 15) * (atand(omega) - asind(omega / sqrt(2 * tau)))
         end
     end
     return xf, yf
@@ -2412,7 +2778,7 @@ function native_to_intermediate(::XPH, phi::Real, theta::Real)
         else
             (90 - theta) * w6
         end
-        xi  = 45 + (psi - 45) * sigma
+        xi = 45 + (psi - 45) * sigma
         eta = 45 * (2 - sigma)
         if sinthe < 0
             eta = -eta
@@ -2425,11 +2791,11 @@ function native_to_intermediate(::XPH, phi::Real, theta::Real)
     if chi < -90
         x = w0 * (-xi + eta);  y = w0 * (-xi - eta)
     elseif chi < 0
-        x = w0 * ( xi + eta);  y = w0 * (-xi + eta)
+        x = w0 * (xi + eta);  y = w0 * (-xi + eta)
     elseif chi < 90
-        x = w0 * ( xi - eta);  y = w0 * ( xi + eta)
+        x = w0 * (xi - eta);  y = w0 * (xi + eta)
     else
-        x = w0 * (-xi - eta);  y = w0 * ( xi - eta)
+        x = w0 * (-xi - eta);  y = w0 * (xi - eta)
     end
     return x, y
 end
@@ -2450,16 +2816,16 @@ function intermediate_to_native(::XPH, x::Real, y::Real)
     yr = y * w0i
 
     if xr <= 0 && yr > 0
-        xi1  = -xr - yr;  eta1 =  xr - yr;  phi_base = -T(180)
+        xi1 = -xr - yr;  eta1 = xr - yr;  phi_base = -T(180)
     elseif xr < 0 && yr <= 0
-        xi1  =  xr - yr;  eta1 =  xr + yr;  phi_base = -T(90)
+        xi1 = xr - yr;  eta1 = xr + yr;  phi_base = -T(90)
     elseif xr >= 0 && yr < 0
-        xi1  =  xr + yr;  eta1 = -xr + yr;  phi_base = T(0)
+        xi1 = xr + yr;  eta1 = -xr + yr;  phi_base = T(0)
     else
-        xi1  = -xr + yr;  eta1 = -xr - yr;  phi_base = T(90)
+        xi1 = -xr + yr;  eta1 = -xr - yr;  phi_base = T(90)
     end
 
-    xi = xi1  + 45
+    xi = xi1 + 45
     eta = eta1 + 90
     abseta = abs(eta)
 

@@ -5,6 +5,26 @@ The main package owns the data model and fallback behavior.  FITS backend
 extensions add methods for their HDU-list/container types.
 """
 
+"""Abstract supertype for backend-independent auxiliary WCS data payloads."""
+abstract type AbstractAuxiliaryWCSData end
+
+"""Auxiliary-data payload for WCS transforms whose headers need no external data."""
+struct NoAuxiliaryWCSData <: AbstractAuxiliaryWCSData end
+
+"""
+    AuxiliaryWCSData
+
+Backend-independent external WCS data resolved at construction time.
+"""
+struct AuxiliaryWCSData{D, C, T} <: AbstractAuxiliaryWCSData
+    det2im::D
+    cpdis::C
+    tabular::T
+end
+
+AuxiliaryWCSData(; det2im = (nothing, nothing), cpdis = (nothing, nothing), tabular = nothing) =
+    AuxiliaryWCSData(det2im, cpdis, tabular)
+
 has_auxiliary(::NoAuxiliaryWCSData) = false
 has_auxiliary(::AbstractAuxiliaryWCSData) = true
 
@@ -31,7 +51,7 @@ function _header_references_external_wcs_data(header::AbstractDict, alt_str::Abs
     return _header_references_tabular_axis(header, alt_str)
 end
 
-function _auxiliary_wcs_data(header::AbstractDict, ::Nothing; alt::Char=' ', minerr::Real=0.0)
+function _auxiliary_wcs_data(header::AbstractDict, ::Nothing; alt::Char = ' ', minerr::Real = 0.0)
     alt_str = alt == ' ' ? "" : string(alt)
 
     # Header-only construction is valid unless the selected WCS references external arrays.
@@ -42,13 +62,15 @@ function _auxiliary_wcs_data(header::AbstractDict, ::Nothing; alt::Char=' ', min
     return NoAuxiliaryWCSData()
 end
 
-function _auxiliary_wcs_data(header::AbstractDict, fobj; alt::Char=' ', minerr::Real=0.0)
+function _auxiliary_wcs_data(header::AbstractDict, fobj; alt::Char = ' ', minerr::Real = 0.0)
     alt_str = alt == ' ' ? "" : string(alt)
 
     # Unknown fobj types are harmless for ordinary header-only WCS metadata.
     _header_references_external_wcs_data(header, alt_str) || return NoAuxiliaryWCSData()
 
-    throw(ArgumentError(
-        "no auxiliary WCS data resolver is defined for fobj type $(typeof(fobj))"
-    ))
+    throw(
+        ArgumentError(
+            "no auxiliary WCS data resolver is defined for fobj type $(typeof(fobj))"
+        )
+    )
 end
