@@ -55,9 +55,17 @@ function celestial_to_native(alpha::Real, delta::Real,
     sin_da, cos_da = sincos(da)
     sin_dp, cos_dp = sincos(delta_p)
 
-    # Paper II, Eq. 5
-    theta = asin(clamp(sin_de * sin_dp + cos_de * cos_dp * cos_da, -one(T), one(T)))
-    phi = phi_p + atan(-cos_de * sin_da, sin_de * cos_dp - cos_de * sin_dp * cos_da)
+    # Paper II, Eq. 5, written in components so theta is stable near the native pole.
+    x = sin_de * cos_dp - cos_de * sin_dp * cos_da
+    y = -cos_de * sin_da
+    z = sin_de * sin_dp + cos_de * cos_dp * cos_da
+
+    # Match WCSLIB's small-angle branch: near |z| = 1, asin(z) loses the
+    # first-order separation, while hypot(x, y) preserves it.
+    theta = abs(z) > T(0.99) ?
+        copysign(acos(clamp(hypot(x, y), zero(T), one(T))), z) :
+        asin(clamp(z, -one(T), one(T)))
+    phi = phi_p + atan(y, x)
     # Normalise phi to [-π, π] (WCSLIB convention).
     phi = mod(phi + _pi(T), 2 * _pi(T)) - _pi(T)
     return phi, theta

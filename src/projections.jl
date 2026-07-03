@@ -470,12 +470,12 @@ function _tpv_inverse(xcoeff::AbstractVector, ycoeff::AbstractVector,
     T = _promote_float_type(x_target, y_target)
     u = T(x_target)
     v = T(y_target)
-    tol_T = _convergence_tol(T)
     xt = T(x_target)
     yt = T(y_target)
+    tol = _convergence_tol(T)
 
-    local prev_r::T = typemax(T)
-    local div_count::Int = 0
+    prev_r = typemax(T)
+    div_count = 0
 
     @inbounds for k in 1:max_iter
         x_corr = _evaluate_tpv_polynomial(xcoeff, u, v)
@@ -484,15 +484,15 @@ function _tpv_inverse(xcoeff::AbstractVector, ycoeff::AbstractVector,
         dv = y_corr - yt
         u -= du
         v -= dv
-        r = hypot(du, dv)
-        r <= tol_T && return u, v
+        r = sum(abs2, (du, dv))
+        r <= tol^2 && return u, v
 
         # Track divergence: residual increasing for 3 consecutive iterations.
         if r >= prev_r
             div_count += 1
             if div_count >= 3
                 @warn "TPV inverse is diverging at iteration $k " *
-                      "(residual $prev_r → $r > tolerance $tol_T); " *
+                      "(residual $(sqrt(prev_r)) → $(sqrt(r)) > tolerance $tol); " *
                       "returning best estimate so far"
                 return u, v
             end
@@ -504,7 +504,7 @@ function _tpv_inverse(xcoeff::AbstractVector, ycoeff::AbstractVector,
 
     # Hit max_iter without converging but residual was decreasing (slow conv).
     @warn "TPV inverse failed to converge after $max_iter iterations " *
-          "(final residual $prev_r > tolerance $tol_T); " *
+          "(final residual $(sqrt(prev_r)) > tolerance $tol); " *
           "returning best estimate"
     return u, v
 end
@@ -1048,7 +1048,7 @@ function intermediate_to_native(proj::CYP, x::Real, y::Real)
 
     # WCSLIB: eta = y / (R2D*(lambda+mu)), then atan2d(eta,1) + asind(eta*lambda/√(eta²+1)).
     eta = deg2rad(y) / (lam + mu)
-    theta = atan(eta, one(T)) + asin(clamp((eta * lam) / hypot(eta, one(T)), -one(T), one(T)))
+    theta = atan(eta, one(T)) + asin(clamp((eta * lam) / sqrt(eta^2 + 1), -one(T), one(T)))
     return phi, theta
 end
 
