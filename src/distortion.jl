@@ -38,25 +38,14 @@ Pre-linear distortion pipeline.  Detector-to-image lookup tables are applied
 first; SIP and CPDIS offsets are then evaluated at the detector-corrected
 coordinate before the linear WCS matrix.
 """
-struct DistortionPipeline{S <: Union{Nothing, SIPDistortion}, D, C} <: AbstractDistortionPipeline
-    det2im::NTuple{2, Union{Nothing, D}}
+struct DistortionPipeline{S <: Union{Nothing, SIPDistortion}, D <: Tuple, C <: Tuple} <: AbstractDistortionPipeline
+    det2im::D
     sip::S
-    cpdis::NTuple{2, Union{Nothing, C}}
-end
-
-function _distortion_stage_type(tables::Tuple)
-    stage_type = Nothing
-
-    # Use the concrete table type when present, and default empty stages to Nothing.
-    for table in tables
-        isnothing(table) && continue
-        stage_type = stage_type === Nothing ? typeof(table) : typejoin(stage_type, typeof(table))
-    end
-    return stage_type
+    cpdis::C
 end
 
 DistortionPipeline(sip::SIPDistortion) =
-    DistortionPipeline{typeof(sip), Nothing, Nothing}((nothing, nothing), sip, (nothing, nothing))
+    DistortionPipeline{typeof(sip), Tuple{Nothing, Nothing}, Tuple{Nothing, Nothing}}((nothing, nothing), sip, (nothing, nothing))
 
 function distortion_pipeline(sip::Union{Nothing, SIPDistortion}, ::NoAuxiliaryWCSData)
     # Header-only WCS uses the existing no-op or SIP-only pipeline.
@@ -72,10 +61,8 @@ function distortion_pipeline(sip::Union{Nothing, SIPDistortion}, aux::AuxiliaryW
         return NoDistortionPipeline()
     end
 
-    # Bind lookup-stage type parameters even when one stage contains only nothing entries.
-    D = _distortion_stage_type(det2im)
-    C = _distortion_stage_type(cpdis)
-    return DistortionPipeline{typeof(sip), D, C}(det2im, sip, cpdis)
+    # Preserve exact tuple types so no-lookup and partial-lookup stages stay concrete.
+    return DistortionPipeline{typeof(sip), typeof(det2im), typeof(cpdis)}(det2im, sip, cpdis)
 end
 
 function has_sip_keywords(header::AbstractDict, alt_str::AbstractString)
@@ -149,7 +136,7 @@ has_distortion(::DistortionPipeline) = true
 
 function _lookup_stage_offset(tables::Tuple, coord::StaticVector{N, T}) where {N, T}
     if length(tables) != 2 || N < 2
-        return zero(SVector{N, T})
+        throw(ArgumentError("lookup stage requires two tables and at least two pixel axes, got $(length(tables)) tables and $N axes"))
     end
     x = coord[1]
     y = coord[2]
@@ -177,6 +164,8 @@ function evaluate_sip_polynomial(coeff::AbstractMatrix, u::Real, v::Real)
     return value
 end
 
+sip_pixel_to_focal(::Nothing, pixel::AbstractVector) = SVector{2, _coordinate_float_type(pixel)}(pixel[1], pixel[2])
+sip_pixel_to_focal(::Nothing, pixel::StaticVector) = pixel
 function sip_pixel_to_focal(sip::SIPDistortion, pixel::AbstractVector)
     length(pixel) >= 2 || throw(DimensionMismatch("SIP distortion requires at least two pixel axes"))
 
@@ -210,8 +199,8 @@ function sip_focal_to_pixel(sip::SIPDistortion, focal::AbstractVector)
     pixel = SVector{2, T}(T(focal[1]), T(focal[2]))  # initial guess
     target = SVector{2, T}(T(focal[1]), T(focal[2]))
     max_iter = 64
-    tol = 1e-10
-    prev_r = Inf
+    tol = _convergence_tol(T)
+    prev_r = T(Inf)
     div_count = 0
 
     for k in 1:max_iter
@@ -219,14 +208,14 @@ function sip_focal_to_pixel(sip::SIPDistortion, focal::AbstractVector)
         dx = corrected[1] - target[1]
         dy = corrected[2] - target[2]
         pixel = SVector{2, T}(pixel[1] - dx, pixel[2] - dy)
-        r = hypot(dx, dy)
-        r <= tol && return pixel
+        r = sum(abs2, (dx, dy))
+        r <= tol^2 && return pixel
 
         if r >= prev_r
             div_count += 1
             if div_count >= 3
                 @warn "SIP inverse is diverging at iteration $k " *
-                    "(residual $prev_r → $r > tolerance $tol); " *
+                    "(residual $(sqrt(prev_r)) → $(sqrt(r)) > tolerance $tol); " *
                     "returning best estimate so far"
                 return pixel
             end
@@ -237,7 +226,7 @@ function sip_focal_to_pixel(sip::SIPDistortion, focal::AbstractVector)
     end
 
     @warn "SIP inverse failed to converge after $max_iter iterations " *
-        "(final residual $prev_r > tolerance $tol); " *
+        "(final residual $sqrt(prev_r) > tolerance $tol); " *
         "returning best estimate"
     return SVector{2, T}(pixel)
 end
@@ -303,21 +292,70 @@ function focal_to_pixel(pipeline::DistortionPipeline, focal::AbstractVector, v::
     return focal_to_pixel(pipeline, coord, v)
 end
 
-function focal_to_pixel(pipeline::DistortionPipeline, focal::StaticVector{N}, ::Val{N}) where {N}
-    if any(!isnothing, pipeline.det2im) || any(!isnothing, pipeline.cpdis)
-        throw(ArgumentError("inverse Paper IV lookup distortion is not implemented yet"))
-    end
+# No Paper IV lookup stage is present, so we invert only SIP stage.
+# This dispatch is needed to avoid allocations in the common case of SIP-only distortion.
+function focal_to_pixel(pipeline::DistortionPipeline{S, Tuple{Nothing, Nothing}, Tuple{Nothing, Nothing}}, focal::StaticVector{N}, ::Val{N}) where {S, N}
+    T = _coordinate_float_type(focal)
 
     # Preserve identity behavior for SIP-free pipeline variants.
-    T = _coordinate_float_type(focal)
     if isnothing(pipeline.sip)
         return SVector{N, T}(ntuple(i -> T(focal[i]), N))
     end
 
-    # Invert the SIP stage; full pipeline inversion will extend this.
+    # Invert SIP-only pipelines through the existing SIP inverse path.
     px, py = sip_focal_to_pixel(pipeline.sip, focal)
     return SVector{N,T}(ntuple(i ->
         i == 1 ? T(px) :
         i == 2 ? T(py) :
         T(focal[i]), N))
+end
+
+# Has Paper IV lookup stage, so we must iterate to invert the full pipeline.
+function focal_to_pixel(pipeline::DistortionPipeline, focal::StaticVector{N}, ::Val{N}) where {N}
+    T = _coordinate_float_type(focal)
+
+    target = SVector{N, T}(ntuple(i -> T(focal[i]), N))
+    pixel = target
+
+    # Use the SIP inverse as a better starting point when it is available with fast inverse coefficients.
+    if !isnothing(pipeline.sip) && !isnothing(pipeline.sip.ap) && !isnothing(pipeline.sip.bp)
+        px, py = sip_focal_to_pixel(pipeline.sip, target)
+        pixel = SVector{N, T}(ntuple(i -> i == 1 ? T(px) :
+                                          i == 2 ? T(py) :
+                                          target[i], N))
+    end
+
+    max_iter = 64
+    # TODO: Consider reducing tolerance, iterations here are expensive
+    tol = _convergence_tol(T)
+    prev_r = T(Inf)
+    div_count = 0
+
+    for k in 1:max_iter
+        # Correct the current estimate using the full forward distortion model.
+        residual = pixel_to_focal(pipeline, pixel, Val(N)) - target
+        r = sum(abs2, residual)
+        r <= tol^2 && return pixel
+
+        pixel = pixel - residual
+
+        # Match SIP inverse behavior: warn and return a best effort if the solve diverges.
+        if r > prev_r
+            div_count += 1
+            if div_count >= 3
+                @warn "Paper IV lookup inverse is diverging at iteration $k " *
+                    "(residual $(sqrt(prev_r)) → $(sqrt(r)) > tolerance $tol); " *
+                    "returning best estimate so far"
+                return pixel
+            end
+        else
+            div_count = 0
+        end
+        prev_r = r
+    end
+
+    @warn "Paper IV lookup inverse failed to converge after $max_iter iterations " *
+        "(final residual $(sqrt(prev_r)) > tolerance $tol); " *
+        "returning best estimate"
+    return pixel
 end

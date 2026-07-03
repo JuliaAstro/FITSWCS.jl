@@ -102,6 +102,54 @@ const _hdr_sip = Dict(
 )
 const WCS_SIP = WCS(_hdr_sip)
 
+const _hdr_sip_paperiv = merge(
+    copy(_hdr_sip),
+    Dict(
+        "D2IMDIS1" => "LOOKUP", "D2IM1.AXIS.1" => 1,
+        "D2IMDIS2" => "LOOKUP", "D2IM2.AXIS.2" => 2,
+        "CPDIS1" => "LOOKUP", "DP1.AXIS.1" => 1,
+        "CPDIS2" => "LOOKUP", "DP2.AXIS.2" => 2,
+    ),
+)
+
+"""Synthetic in-memory auxiliary-data source for TAN-SIP + Paper IV benchmarks."""
+struct BenchmarkPaperIVFobj end
+
+const _d2im_x = FITSWCS.LookupTable2D(
+    [1.0e-3 * (i - 1) + 2.0e-4 * (j - 1) for i in 1:16, j in 1:16];
+    crpix = (1.0, 1.0),
+    crval = (1.0, 1.0),
+    cdelt = (64.0, 64.0),
+)
+const _d2im_y = FITSWCS.LookupTable2D(
+    [-3.0e-4 * (i - 1) + 8.0e-4 * (j - 1) for i in 1:16, j in 1:16];
+    crpix = (1.0, 1.0),
+    crval = (1.0, 1.0),
+    cdelt = (64.0, 64.0),
+)
+const _cpdis_x = FITSWCS.LookupTable2D(
+    [7.0e-4 * sin(0.2 * i) + 2.0e-4 * cos(0.15 * j) for i in 1:16, j in 1:16];
+    crpix = (1.0, 1.0),
+    crval = (1.0, 1.0),
+    cdelt = (64.0, 64.0),
+)
+const _cpdis_y = FITSWCS.LookupTable2D(
+    [5.0e-4 * cos(0.18 * i) - 3.0e-4 * sin(0.12 * j) for i in 1:16, j in 1:16];
+    crpix = (1.0, 1.0),
+    crval = (1.0, 1.0),
+    cdelt = (64.0, 64.0),
+)
+
+function FITSWCS._auxiliary_wcs_data(header::AbstractDict, ::BenchmarkPaperIVFobj; alt::Char = ' ', minerr::Real = 0.0)
+    # Return prebuilt backend-neutral lookup tables so benchmarks avoid FITS I/O.
+    return FITSWCS.AuxiliaryWCSData(
+        det2im = (_d2im_x, _d2im_y),
+        cpdis = (_cpdis_x, _cpdis_y),
+    )
+end
+
+const WCS_SIP_PAPERIV = WCS(_hdr_sip_paperiv; fobj = BenchmarkPaperIVFobj())
+
 const _hdr_cube = Dict(
     "NAXIS"  => 3,
     "CTYPE1" => "RA---TAN",  "CTYPE2" => "DEC--TAN",  "CTYPE3" => "FREQ",
@@ -115,11 +163,13 @@ const WCS_CUBE = WCS(_hdr_cube)
 const _pix_tan   = [400.0, 300.0]
 const _pix_ait   = [300.0, 150.0]
 const _pix_sip   = [400.0, 300.0]
+const _pix_sip_paperiv = [400.0, 300.0]
 const _pix_cube  = [40.0, 60.0, 5.0]
 
 const _world_tan  = pixel_to_world(WCS_TAN, _pix_tan)
 const _world_ait  = pixel_to_world(WCS_AIT, _pix_ait)
 const _world_sip  = pixel_to_world(WCS_SIP, _pix_sip)
+const _world_sip_paperiv = pixel_to_world(WCS_SIP_PAPERIV, _pix_sip_paperiv)
 const _world_cube = pixel_to_world(WCS_CUBE, _pix_cube)
 
 # Batch of 100 pixels for TAN
@@ -142,6 +192,7 @@ let g = SUITE["pixel_to_world"]
     g["TAN/scalar/Tuple"] = @benchmarkable pixel_to_world($WCS_TAN, $(Tuple(_pix_tan))) evals=100
     g["AIT/scalar"] = @benchmarkable pixel_to_world($WCS_AIT, $_pix_ait) evals=100
     g["TAN-SIP/scalar"] = @benchmarkable pixel_to_world($WCS_SIP, $_pix_sip) evals=100
+    g["TAN-SIP-PaperIV/scalar"] = @benchmarkable pixel_to_world($WCS_SIP_PAPERIV, $_pix_sip_paperiv) evals=100
     g["3D-cube/scalar"] = @benchmarkable pixel_to_world($WCS_CUBE, $_pix_cube) evals=100
     g["TAN/batch-100"] = @benchmarkable pixel_to_world($WCS_TAN, $_batch_pix) evals=1
     g["TAN/batch-1M"] = @benchmarkable pixel_to_world($WCS_TAN, $_batch_pix_1M) evals=1
@@ -154,6 +205,7 @@ let g = SUITE["world_to_pixel"]
     g["TAN/scalar"] = @benchmarkable world_to_pixel($WCS_TAN, $_world_tan) evals=100
     g["AIT/scalar"] = @benchmarkable world_to_pixel($WCS_AIT, $_world_ait) evals=100
     g["TAN-SIP/scalar"] = @benchmarkable world_to_pixel($WCS_SIP, $_world_sip) evals=100
+    g["TAN-SIP-PaperIV/scalar"] = @benchmarkable world_to_pixel($WCS_SIP_PAPERIV, $_world_sip_paperiv) evals=100
     g["3D-cube/scalar"] = @benchmarkable world_to_pixel($WCS_CUBE, $_world_cube) evals=100
     g["TAN/batch-100"] = @benchmarkable world_to_pixel($WCS_TAN, $_batch_world) evals=1
     g["TAN/batch-1M"] = @benchmarkable world_to_pixel($WCS_TAN, $_batch_world_1M) evals=1

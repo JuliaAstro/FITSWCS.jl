@@ -1662,8 +1662,8 @@ end
             @test lookup_wcs.aux.cpdis[1] isa LookupTable2D
             @test lookup_wcs.aux.det2im[2] isa LookupTable2D
             @test pixel_to_world(lookup_wcs, [1.0, 1.0]) ≈ [0.5, 0.25]
-            @test_throws ArgumentError world_to_pixel(lookup_wcs, [0.5, 0.25])
-            @test_throws ArgumentError world_to_pixel(lookup_wcs, reshape([0.5, 0.25], 2, 1))
+            @test world_to_pixel(lookup_wcs, [0.5, 0.25]) ≈ [1.0, 1.0]
+            @test world_to_pixel(lookup_wcs, reshape([0.5, 0.25], 2, 1)) ≈ reshape([1.0, 1.0], 2, 1)
         end
     end
 end
@@ -1750,8 +1750,8 @@ end
     @test lookup_wcs.aux.cpdis[1] isa LookupTable2D
     @test lookup_wcs.aux.det2im[2] isa LookupTable2D
     @test pixel_to_world(lookup_wcs, [1.0, 1.0]) ≈ [0.5, 0.25]
-    @test_throws ArgumentError world_to_pixel(lookup_wcs, [0.5, 0.25])
-    @test_throws ArgumentError world_to_pixel(lookup_wcs, reshape([0.5, 0.25], 2, 1))
+    @test world_to_pixel(lookup_wcs, [0.5, 0.25]) ≈ [1.0, 1.0]
+    @test world_to_pixel(lookup_wcs, reshape([0.5, 0.25], 2, 1)) ≈ reshape([1.0, 1.0], 2, 1)
 end
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -1770,12 +1770,46 @@ end
 
     @test wcs.pipeline isa DistortionPipeline
     @test pixel_to_focal(wcs.pipeline, [1.0, 1.0], Val(2)) ≈ [2.0, 1.25]
+    @test focal_to_pixel(wcs.pipeline, [2.0, 1.25], Val(2)) ≈ [1.0, 1.0]
     @test pixel_to_world(wcs, [1.0, 1.0]) ≈ [1.0, 0.25]
+    @test world_to_pixel(wcs, [1.0, 0.25]) ≈ [1.0, 1.0]
 
     pixels = [1.0 2.0; 1.0 1.0]
     worlds = pixel_to_world(wcs, pixels)
     @test worlds[:, 1] ≈ pixel_to_world(wcs, pixels[:, 1])
     @test worlds[:, 2] ≈ pixel_to_world(wcs, pixels[:, 2])
+    @test world_to_pixel(wcs, worlds) ≈ pixels
+end
+
+# ──────────────────────────────────────────────────────────────────────────────
+@testset "Paper IV and SIP composition" begin
+    # Nonzero SIP and Paper IV lookup stages should compose in detector, SIP, CPDIS order.
+    hdr = Dict(
+        "NAXIS"  => 2,
+        "CTYPE1" => "X", "CTYPE2" => "Y",
+        "CRPIX1" => 1.0, "CRPIX2" => 1.0,
+        "CDELT1" => 1.0, "CDELT2" => 1.0,
+        "A_ORDER" => 2, "B_ORDER" => 2,
+        "A_2_0" => 0.1, "B_0_2" => 0.2,
+        "CPDIS1" => "LOOKUP", "DP1.AXIS.1" => 1,
+        "D2IMDIS2" => "LOOKUP", "D2IM2.AXIS.2" => 2,
+    )
+
+    wcs = WCS(hdr; fobj=FakeLookupFobj())
+    pixel = [1.0, 1.0]
+    focal_ref = [2.0, 1.3]
+    world_ref = [1.0, 0.3]
+
+    @test wcs.pipeline.sip isa SIPDistortion
+    @test pixel_to_focal(wcs.pipeline, pixel, Val(2)) ≈ focal_ref
+    @test focal_to_pixel(wcs.pipeline, focal_ref, Val(2)) ≈ pixel atol=1e-10
+    @test pixel_to_world(wcs, pixel) ≈ world_ref
+    @test world_to_pixel(wcs, world_ref) ≈ pixel atol=1e-10
+
+    pixels = [1.0 1.5; 1.0 1.0]
+    worlds = pixel_to_world(wcs, pixels)
+    @test world_to_pixel(wcs, worlds) ≈ pixels atol=1e-10
+    @test pixel_to_world(wcs, pixel) ≈ world_ref atol=1e-6
 end
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -1797,6 +1831,9 @@ end
 
     @test pixel_to_world(wcs, [42.0, 22.0]) ≈ [41.5, 21.0]
     @test pixel_to_world(wcs, [13.0, 23.0]) ≈ [12.0, 22.7]
+    @test focal_to_pixel(wcs.pipeline, [42.5, 22.0], Val(2)) ≈ [42.0, 22.0]
+    @test world_to_pixel(wcs, [41.5, 21.0]) ≈ [42.0, 22.0]
+    @test world_to_pixel(wcs, [12.0, 22.7]) ≈ [13.0, 23.0]
 
     for (pixel, world_ref) in [
         ([43.0, 22.0], [42.25, 21.0]),
@@ -1805,6 +1842,7 @@ end
         ([42.0, 21.0], [41.25, 20.0]),
     ]
         @test pixel_to_world(wcs, pixel) ≈ world_ref
+        @test world_to_pixel(wcs, world_ref) ≈ pixel
     end
 
     for (pixel, world_ref) in [
@@ -1814,6 +1852,7 @@ end
         ([13.0, 21.5], [12.0, 20.85]),
     ]
         @test pixel_to_world(wcs, pixel) ≈ world_ref
+        @test world_to_pixel(wcs, world_ref) ≈ pixel
     end
 
     for (pixel, world_ref) in [
@@ -1827,6 +1866,7 @@ end
         ([13.0, 17.0], [12.0, 16.0]),
     ]
         @test pixel_to_world(wcs, pixel) ≈ world_ref
+        @test world_to_pixel(wcs, world_ref) ≈ pixel
     end
 end
 
@@ -1862,10 +1902,15 @@ end
 
         for (pixel, focal_ref) in focal_refs
             @test pixel_to_focal(wcs.pipeline, pixel, Val(2)) ≈ focal_ref atol=1e-10
+            @test focal_to_pixel(wcs.pipeline, focal_ref, Val(2)) ≈ pixel atol=1e-10
         end
 
         for (pixel, world_ref) in refs
             @test pixel_to_world(wcs, pixel) ≈ world_ref atol=1e-10
+        end
+
+        for (pixel, world_ref) in refs
+            @test world_to_pixel(wcs, world_ref) ≈ pixel atol=1e-6
         end
 
         pixels = hcat((ref[1] for ref in refs)...)
@@ -1873,6 +1918,11 @@ end
         for (k, (_, world_ref)) in pairs(refs)
             @test worlds[:, k] ≈ world_ref atol=1e-10
         end
+
+        # Test batch version
+        inverse_pixels = hcat((ref[1] for ref in refs)...)
+        inverse_worlds = hcat((ref[2] for ref in refs)...)
+        @test maximum(abs.(world_to_pixel(wcs, inverse_worlds) .- inverse_pixels)) <= 1e-6
     end
 end
 
