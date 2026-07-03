@@ -26,6 +26,24 @@ Use the following as truth/reference sources:
    * https://fits.gsfc.nasa.gov/fits_wcs.html
    * FITS WCS Papers I–IV where relevant.
    * Pay particular attention to Paper I and Paper II before implementing core linear WCS and celestial projections.
+   * To retrieve paper source through MCP tools, use ADS first and then arXiv:
+     `mcp__ads_mcp.get_abstract` or `search_ads` for the ADS bibcode, read the
+     `arXiv` identifier from the metadata, then use
+     `mcp__arxiv_latex_mcp.list_paper_sections`,
+     `get_paper_section`, or `get_paper_prompt` on that arXiv id.  Example:
+     Paper III is ADS bibcode `2006A&A...446..747G`, arXiv
+     `astro-ph/0507293`.
+   * Useful WCS series identifiers:
+     Paper I `2002A&A...395.1061G`; Paper II
+     `2002A&A...395.1077C`; Paper III `2006A&A...446..747G` /
+     `astro-ph/0507293`; Paper IV distortion preview
+     `2004ASPC..314..551C` and WCSLIB cites the draft dated 2004-04-22
+     from Mark Calabretta's ATNF page; Paper V `2007MNRAS.381..865C`;
+     Paper VI `2013PASA...30...50C`; Paper VII `2015A&A...574A..36R`.
+   * Paper III defines spectral coordinates and the `-TAB` table-lookup
+     convention.  `D2IM`/`CPDIS` lookup distortions are Paper IV/distortion
+     paper behavior; use the Paper IV draft/WCSLIB/Astropy distortion pipeline
+     as the reference for those terms.
 
 2. Existing Julia package:
 

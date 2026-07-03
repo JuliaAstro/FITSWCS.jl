@@ -9,11 +9,42 @@ import FITSWCS:
     _lookup_table_from_image,
     _paper_iv_auxiliary_data
 
+"""
+    _fitsio_parameter_card(value)
+Parse a FITSIO repeated Paper IV parameter-card payload into a `(name, value)` pair."""
+function _fitsio_parameter_card(value)
+    value isa AbstractString || return nothing
+    parts = split(String(value), ':'; limit = 2)
+    length(parts) == 2 || return nothing
+
+    # FITSIO stores HIERARCH Paper IV parameters as repeated string cards.
+    name = uppercase(strip(parts[1]))
+    raw = strip(parts[2])
+    parsed = tryparse(Float64, raw)
+    return name, isnothing(parsed) ? raw : parsed
+end
+
+"""
+    _set_fitsio_header_card!(dict::Dict{String, Any}, key::String, value)
+Store a FITSIO header card and expand supported repeated parameter-card values."""
+function _set_fitsio_header_card!(dict::Dict{String, Any}, key::String, value)
+    # Preserve the normal keyword and expand parameter-card payloads when present.
+    dict[key] = value
+    parsed = _fitsio_parameter_card(value)
+    isnothing(parsed) && return dict
+
+    name, parsed_value = parsed
+    if name == "EXTVER" || name == "NAXES" || startswith(name, "AXIS.")
+        dict["$(key).$(name)"] = parsed_value
+    end
+    return dict
+end
+
 function _fitsio_header_dict(header::FITSIO.FITSHeader)
     # Copy keyword/value pairs into the dictionary shape used by core parsing.
     dict = Dict{String, Any}()
     for (key, value) in zip(keys(header), values(header))
-        dict[String(key)] = value
+        _set_fitsio_header_card!(dict, String(key), value)
     end
     return dict
 end
