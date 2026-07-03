@@ -48,6 +48,22 @@ function FITSWCS._auxiliary_wcs_data(header::AbstractDict, ::FakeLookupFobj; alt
     return AuxiliaryWCSData(det2im=(nothing, d2im_y), cpdis=(cpdis_x, cpdis_y))
 end
 
+"""Fake FITS container that supplies sparse CPDIS-only interpolation tables."""
+struct FakeCPDISInterpolationFobj end
+
+function FITSWCS._auxiliary_wcs_data(header::AbstractDict, ::FakeCPDISInterpolationFobj; alt::Char=' ', minerr::Real=0.0)
+    x_data = zeros(Float32, 25, 25)
+    y_data = zeros(Float32, 25, 25)
+
+    # Place isolated offsets at known lookup-table coordinates.
+    x_data[21, 11] = 0.5
+    y_data[6, 11] = 0.7
+
+    cpdis_x = LookupTable2D(x_data; crpix=(5, 10), crval=(10, 20), cdelt=(2, 2))
+    cpdis_y = LookupTable2D(y_data; crpix=(5, 10), crval=(10, 20), cdelt=(3, 3))
+    return AuxiliaryWCSData(cpdis=(cpdis_x, cpdis_y))
+end
+
 @testset "FITSWCS" begin
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -1760,6 +1776,104 @@ end
     worlds = pixel_to_world(wcs, pixels)
     @test worlds[:, 1] ≈ pixel_to_world(wcs, pixels[:, 1])
     @test worlds[:, 2] ≈ pixel_to_world(wcs, pixels[:, 2])
+end
+
+# ──────────────────────────────────────────────────────────────────────────────
+@testset "Paper IV CPDIS-only interpolation" begin
+    # Sparse CPDIS tables should apply exact and bilinear offsets using table metadata.
+    hdr = Dict(
+        "NAXIS"  => 2,
+        "CTYPE1" => "X", "CTYPE2" => "Y",
+        "CRPIX1" => 1.0, "CRPIX2" => 1.0,
+        "CRVAL1" => 0.0, "CRVAL2" => 0.0,
+        "CDELT1" => 1.0, "CDELT2" => 1.0,
+        "CPDIS1" => "LOOKUP", "DP1.AXIS.1" => 1,
+        "CPDIS2" => "LOOKUP", "DP2.AXIS.2" => 2,
+    )
+
+    wcs = WCS(hdr; fobj=FakeCPDISInterpolationFobj())
+    @test wcs.aux.cpdis[1] isa LookupTable2D
+    @test wcs.aux.cpdis[2] isa LookupTable2D
+
+    @test pixel_to_world(wcs, [42.0, 22.0]) ≈ [41.5, 21.0]
+    @test pixel_to_world(wcs, [13.0, 23.0]) ≈ [12.0, 22.7]
+
+    for (pixel, world_ref) in [
+        ([43.0, 22.0], [42.25, 21.0]),
+        ([41.0, 22.0], [40.25, 21.0]),
+        ([42.0, 23.0], [41.25, 22.0]),
+        ([42.0, 21.0], [41.25, 20.0]),
+    ]
+        @test pixel_to_world(wcs, pixel) ≈ world_ref
+    end
+
+    for (pixel, world_ref) in [
+        ([14.5, 23.0], [13.5, 22.35]),
+        ([11.5, 23.0], [10.5, 22.35]),
+        ([13.0, 24.5], [12.0, 23.85]),
+        ([13.0, 21.5], [12.0, 20.85]),
+    ]
+        @test pixel_to_world(wcs, pixel) ≈ world_ref
+    end
+
+    for (pixel, world_ref) in [
+        ([46.0, 22.0], [45.0, 21.0]),
+        ([38.0, 22.0], [37.0, 21.0]),
+        ([42.0, 26.0], [41.0, 25.0]),
+        ([42.0, 18.0], [41.0, 17.0]),
+        ([19.0, 23.0], [18.0, 22.0]),
+        ([7.0, 23.0], [6.0, 22.0]),
+        ([13.0, 29.0], [12.0, 28.0]),
+        ([13.0, 17.0], [12.0, 16.0]),
+    ]
+        @test pixel_to_world(wcs, pixel) ≈ world_ref
+    end
+end
+
+# ──────────────────────────────────────────────────────────────────────────────
+@testset "Paper IV forward distortion Astropy regression" begin
+    # Astropy's dist_lookup fixture exercises real SIP, D2IM, and CPDIS tables.
+    refs = [
+        ([1.0, 1.0], [5.5264578963294078, -72.051718954260323]),
+        ([24.0, 24.0], [5.5278318183240547, -72.051898631854385]),
+        ([512.0, 512.0], [5.5571048564879018, -72.055692801825842]),
+        ([1024.0, 1024.0], [5.5880253054822395, -72.059638092645642]),
+        ([100.0, 200.0], [5.5343152229426584, -72.053752245702228]),
+        ([700.25, 300.75], [5.5607016650989554, -72.05211216803022]),
+        ([2048.0, 1024.0], [5.6305686380276061, -72.054571792078278]),
+    ]
+    focal_refs = [
+        ([1.0, 1.0], [34.071093418170157, 0.62674039300433648]),
+        ([24.0, 24.0], [56.301206127480675, 23.608765313128124]),
+        ([512.0, 512.0], [530.78963861021305, 511.09249280708974]),
+        ([1024.0, 1024.0], [1033.4930976678936, 1022.0527435313898]),
+        ([100.0, 200.0], [130.29194796774041, 199.32780993366652]),
+        ([700.25, 300.75], [713.51391137340056, 300.39852642546708]),
+        ([2048.0, 1024.0], [2048.0122948031303, 1024.0008731349378]),
+    ]
+
+    FITSIO.FITS(joinpath(@__DIR__, "dist_lookup.fits.gz")) do file
+        wcs = WCS(file[2]; fobj=file)
+
+        @test wcs.aux isa AuxiliaryWCSData
+        @test wcs.aux.det2im[1] isa LookupTable2D
+        @test wcs.aux.cpdis[1] isa LookupTable2D
+        @test wcs.aux.cpdis[2] isa LookupTable2D
+
+        for (pixel, focal_ref) in focal_refs
+            @test pixel_to_focal(wcs.pipeline, pixel, Val(2)) ≈ focal_ref atol=1e-10
+        end
+
+        for (pixel, world_ref) in refs
+            @test pixel_to_world(wcs, pixel) ≈ world_ref atol=1e-10
+        end
+
+        pixels = hcat((ref[1] for ref in refs)...)
+        worlds = pixel_to_world(wcs, pixels)
+        for (k, (_, world_ref)) in pairs(refs)
+            @test worlds[:, k] ≈ world_ref atol=1e-10
+        end
+    end
 end
 
 # ──────────────────────────────────────────────────────────────────────────────

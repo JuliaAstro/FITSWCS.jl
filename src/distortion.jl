@@ -35,13 +35,24 @@ struct NoDistortionPipeline <: AbstractDistortionPipeline end
     DistortionPipeline
 
 Pre-linear distortion pipeline.  Detector-to-image lookup tables are applied
-before SIP, and CPDIS lookup tables are applied after SIP before the linear WCS
-matrix.
+first; SIP and CPDIS offsets are then evaluated at the detector-corrected
+coordinate before the linear WCS matrix.
 """
 struct DistortionPipeline{S <: Union{Nothing, SIPDistortion}, D, C} <: AbstractDistortionPipeline
     det2im::NTuple{2, Union{Nothing, D}}
     sip::S
     cpdis::NTuple{2, Union{Nothing, C}}
+end
+
+function _distortion_stage_type(tables::Tuple)
+    stage_type = Nothing
+
+    # Use the concrete table type when present, and default empty stages to Nothing.
+    for table in tables
+        isnothing(table) && continue
+        stage_type = stage_type === Nothing ? typeof(table) : typejoin(stage_type, typeof(table))
+    end
+    return stage_type
 end
 
 DistortionPipeline(sip::SIPDistortion) =
@@ -60,7 +71,11 @@ function distortion_pipeline(sip::Union{Nothing, SIPDistortion}, aux::AuxiliaryW
     if isnothing(sip) && all(isnothing, det2im) && all(isnothing, cpdis)
         return NoDistortionPipeline()
     end
-    return DistortionPipeline(det2im, sip, cpdis)
+
+    # Bind lookup-stage type parameters even when one stage contains only nothing entries.
+    D = _distortion_stage_type(det2im)
+    C = _distortion_stage_type(cpdis)
+    return DistortionPipeline{typeof(sip), D, C}(det2im, sip, cpdis)
 end
 
 function has_sip_keywords(header::AbstractDict, alt_str::AbstractString)
@@ -132,18 +147,19 @@ distortion_pipeline(sip::SIPDistortion) = DistortionPipeline(sip)
 has_distortion(::NoDistortionPipeline) = false
 has_distortion(::DistortionPipeline) = true
 
-function _apply_lookup_stage(tables::Tuple, coord::StaticVector{N, T}) where {N, T}
-    length(tables) == 2 || return coord
-    N >= 2 || return coord
+function _lookup_stage_offset(tables::Tuple, coord::StaticVector{N, T}) where {N, T}
+    if length(tables) != 2 || N < 2
+        return zero(SVector{N, T})
+    end
     x = coord[1]
     y = coord[2]
 
     # Paper IV image arrays store additive offsets for each corrected axis.
     dx = isnothing(tables[1]) ? zero(T) : T(tables[1](x, y))
     dy = isnothing(tables[2]) ? zero(T) : T(tables[2](x, y))
-    return SVector{N, T}(ntuple(i -> i == 1 ? x + dx : 
-                                     i == 2 ? y + dy :
-                                     coord[i], N))
+    return SVector{N, T}(ntuple(i -> i == 1 ? dx :
+                                     i == 2 ? dy :
+                                     zero(T), N))
 end
 
 function evaluate_sip_polynomial(coeff::AbstractMatrix, u::Real, v::Real)
@@ -252,15 +268,16 @@ end
 function pixel_to_focal(pipeline::DistortionPipeline, pixel::StaticVector{N}, ::Val{N}) where {N}
     T = _coordinate_float_type(pixel)
 
-    # Apply Paper IV detector-to-image, then SIP, then Paper IV pre-linear lookup corrections.
-    coord = _apply_lookup_stage(pipeline.det2im, pixel)
+    # Evaluate all prior distortion offsets at the detector-corrected coordinate.
+    detector = pixel + _lookup_stage_offset(pipeline.det2im, pixel)
+    coord = detector
     if !isnothing(pipeline.sip)
-        fx, fy = sip_pixel_to_focal(pipeline.sip, coord)
+        fx, fy = sip_pixel_to_focal(pipeline.sip, detector)
         coord = SVector{N, T}(ntuple(i -> i == 1 ? T(fx) :
                                           i == 2 ? T(fy) :
-                                          coord[i], N))
+                                          detector[i], N))
     end
-    return _apply_lookup_stage(pipeline.cpdis, coord)
+    return coord + _lookup_stage_offset(pipeline.cpdis, detector)
 end
 
 function focal_to_pixel(::NoDistortionPipeline, focal::AbstractVector, ::Val{N}) where {N}
