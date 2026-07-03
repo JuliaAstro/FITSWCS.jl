@@ -136,35 +136,35 @@ const _batch_world_1M = pixel_to_world(WCS_TAN, _batch_pix_1M)
 
 SUITE["pixel_to_world"] = BenchmarkGroup()
 let g = SUITE["pixel_to_world"]
-    g["TAN/scalar"]     = @benchmarkable pixel_to_world($WCS_TAN, $_pix_tan)
-    g["TAN/scalar/SVector Float64"] = @benchmarkable pixel_to_world($WCS_TAN, $(SVector{2,Float64}(_pix_tan)))
-    g["TAN/scalar/SVector Float32"] = @benchmarkable pixel_to_world($WCS_TAN, $(SVector{2,Float32}(Float32.(_pix_tan))))
-    g["TAN/scalar/Tuple"] = @benchmarkable pixel_to_world($WCS_TAN, $(Tuple(_pix_tan)))
-    g["AIT/scalar"]     = @benchmarkable pixel_to_world($WCS_AIT, $_pix_ait)
-    g["TAN-SIP/scalar"] = @benchmarkable pixel_to_world($WCS_SIP, $_pix_sip)
-    g["3D-cube/scalar"] = @benchmarkable pixel_to_world($WCS_CUBE, $_pix_cube)
-    g["TAN/batch-100"]  = @benchmarkable pixel_to_world($WCS_TAN, $_batch_pix)
-    g["TAN/batch-1M"]  = @benchmarkable pixel_to_world($WCS_TAN, $_batch_pix_1M)
+    g["TAN/scalar"] = @benchmarkable pixel_to_world($WCS_TAN, $_pix_tan) evals=100
+    g["TAN/scalar/SVector Float64"] = @benchmarkable pixel_to_world($WCS_TAN, $(SVector{2,Float64}(_pix_tan))) evals=100
+    g["TAN/scalar/SVector Float32"] = @benchmarkable pixel_to_world($WCS_TAN, $(SVector{2,Float32}(Float32.(_pix_tan)))) evals=100
+    g["TAN/scalar/Tuple"] = @benchmarkable pixel_to_world($WCS_TAN, $(Tuple(_pix_tan))) evals=100
+    g["AIT/scalar"] = @benchmarkable pixel_to_world($WCS_AIT, $_pix_ait) evals=100
+    g["TAN-SIP/scalar"] = @benchmarkable pixel_to_world($WCS_SIP, $_pix_sip) evals=100
+    g["3D-cube/scalar"] = @benchmarkable pixel_to_world($WCS_CUBE, $_pix_cube) evals=100
+    g["TAN/batch-100"] = @benchmarkable pixel_to_world($WCS_TAN, $_batch_pix) evals=1
+    g["TAN/batch-1M"] = @benchmarkable pixel_to_world($WCS_TAN, $_batch_pix_1M) evals=1
 end
 
 # ── world_to_pixel ───────────────────────────────────────────────────────────
 
 SUITE["world_to_pixel"] = BenchmarkGroup()
 let g = SUITE["world_to_pixel"]
-    g["TAN/scalar"]     = @benchmarkable world_to_pixel($WCS_TAN, $_world_tan)
-    g["AIT/scalar"]     = @benchmarkable world_to_pixel($WCS_AIT, $_world_ait)
-    g["TAN-SIP/scalar"] = @benchmarkable world_to_pixel($WCS_SIP, $_world_sip)
-    g["3D-cube/scalar"] = @benchmarkable world_to_pixel($WCS_CUBE, $_world_cube)
-    g["TAN/batch-100"]  = @benchmarkable world_to_pixel($WCS_TAN, $_batch_world)
-    g["TAN/batch-1M"]  = @benchmarkable world_to_pixel($WCS_TAN, $_batch_world_1M)
+    g["TAN/scalar"] = @benchmarkable world_to_pixel($WCS_TAN, $_world_tan) evals=100
+    g["AIT/scalar"] = @benchmarkable world_to_pixel($WCS_AIT, $_world_ait) evals=100
+    g["TAN-SIP/scalar"] = @benchmarkable world_to_pixel($WCS_SIP, $_world_sip) evals=100
+    g["3D-cube/scalar"] = @benchmarkable world_to_pixel($WCS_CUBE, $_world_cube) evals=100
+    g["TAN/batch-100"] = @benchmarkable world_to_pixel($WCS_TAN, $_batch_world) evals=1
+    g["TAN/batch-1M"] = @benchmarkable world_to_pixel($WCS_TAN, $_batch_world_1M) evals=1
 end
 
 # ── parsing ──────────────────────────────────────────────────────────────────
 
 SUITE["parsing"] = BenchmarkGroup()
 let g = SUITE["parsing"]
-    g["WCS/TAN"]     = @benchmarkable WCS($_hdr_tan)
-    g["WCS/AIT"]     = @benchmarkable WCS($_hdr_ait)
+    g["WCS/TAN"] = @benchmarkable WCS($_hdr_tan)
+    g["WCS/AIT"] = @benchmarkable WCS($_hdr_ait)
     g["WCS/TAN-SIP"] = @benchmarkable WCS($_hdr_sip)
     g["WCS/3D-cube"] = @benchmarkable WCS($_hdr_cube)
 end
