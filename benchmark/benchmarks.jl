@@ -13,7 +13,7 @@ Usage (AirSpeedVelocity, from repo root):
 Groups:
     "pixel_to_world" – forward pixel → world transforms
     "world_to_pixel" – inverse world → pixel transforms
-    "parsing"        – from_header construction
+    "parsing"        – WCS construction
 """
 
 using BenchmarkTools
@@ -78,7 +78,7 @@ const _hdr_tan = Dict(
     "CRVAL1" => 83.8221,     "CRVAL2" => -5.3911,
     "CDELT1" => -2.7778e-4,  "CDELT2" =>  2.7778e-4,
 )
-const WCS_TAN = from_header(_hdr_tan)
+const WCS_TAN = WCS(_hdr_tan)
 
 const _hdr_ait = Dict(
     "NAXIS"  => 2,
@@ -87,7 +87,7 @@ const _hdr_ait = Dict(
     "CRVAL1" => 0.0,         "CRVAL2" => 0.0,
     "CDELT1" => -0.5,        "CDELT2" => 0.5,
 )
-const WCS_AIT = from_header(_hdr_ait)
+const WCS_AIT = WCS(_hdr_ait)
 
 const _hdr_sip = Dict(
     "NAXIS"   => 2,
@@ -100,7 +100,7 @@ const _hdr_sip = Dict(
     "B_ORDER" => 2,
     "B_2_0"   => 1.0e-6,           "B_0_2"   => 0.0,     "B_1_1" => 3.0e-6,
 )
-const WCS_SIP = from_header(_hdr_sip)
+const WCS_SIP = WCS(_hdr_sip)
 
 const _hdr_cube = Dict(
     "NAXIS"  => 3,
@@ -109,7 +109,7 @@ const _hdr_cube = Dict(
     "CRVAL1" => 10.0,        "CRVAL2" => 25.0,          "CRVAL3" => 1.42e9,
     "CDELT1" => -0.01,       "CDELT2" =>  0.01,         "CDELT3" => 1.0e6,
 )
-const WCS_CUBE = from_header(_hdr_cube)
+const WCS_CUBE = WCS(_hdr_cube)
 
 # Sample pixels
 const _pix_tan   = [400.0, 300.0]
@@ -163,10 +163,10 @@ end
 
 SUITE["parsing"] = BenchmarkGroup()
 let g = SUITE["parsing"]
-    g["from_header/TAN"]     = @benchmarkable from_header($_hdr_tan)
-    g["from_header/AIT"]     = @benchmarkable from_header($_hdr_ait)
-    g["from_header/TAN-SIP"] = @benchmarkable from_header($_hdr_sip)
-    g["from_header/3D-cube"] = @benchmarkable from_header($_hdr_cube)
+    g["WCS/TAN"]     = @benchmarkable WCS($_hdr_tan)
+    g["WCS/AIT"]     = @benchmarkable WCS($_hdr_ait)
+    g["WCS/TAN-SIP"] = @benchmarkable WCS($_hdr_sip)
+    g["WCS/3D-cube"] = @benchmarkable WCS($_hdr_cube)
 end
 
 
