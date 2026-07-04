@@ -1910,7 +1910,7 @@ end
         end
 
         for (pixel, world_ref) in refs
-            @test world_to_pixel(wcs, world_ref) ≈ pixel atol=1e-6
+            @test world_to_pixel(wcs, world_ref) ≈ pixel atol=1e-8
         end
 
         pixels = hcat((ref[1] for ref in refs)...)
@@ -1922,7 +1922,7 @@ end
         # Test batch version
         inverse_pixels = hcat((ref[1] for ref in refs)...)
         inverse_worlds = hcat((ref[2] for ref in refs)...)
-        @test maximum(abs.(world_to_pixel(wcs, inverse_worlds) .- inverse_pixels)) <= 1e-6
+        @test maximum(abs.(world_to_pixel(wcs, inverse_worlds) .- inverse_pixels)) <= 1e-8
     end
 end
 
