@@ -31,7 +31,9 @@ function pixel_to_intermediate(wcs::WCSTransform{N}, pixel::AbstractVector) wher
     T = _coordinate_float_type(pixel)
     focal = pixel_to_focal(wcs.pipeline, pixel, Val(N))
     delta = SVector{N,T}(ntuple(i -> T(focal[i]) - T(wcs.crpix[i]), N))
-    return wcs.cd * delta
+    # Convert CD to T so the matrix-vector product preserves input precision.
+    cd_T = SMatrix{N, N, T}(wcs.cd)
+    return cd_T * delta
 end
 
 
@@ -46,7 +48,10 @@ if the matrix is singular.
 function intermediate_to_pixel(wcs::WCSTransform{N}, intermediate::StaticVector{N}) where {N}
     T = _coordinate_float_type(intermediate)
     # Undo the linear matrix to recover focal/image-plane pixel coordinates.
-    focal = wcs.crpix .+ (wcs.cd \ intermediate)
+    # Convert CD and CRPIX to T so that the output preserves the input precision.
+    cd_T = SMatrix{N, N, T}(wcs.cd)
+    cpix_T = SVector{N, T}(wcs.crpix)
+    focal = cpix_T .+ (cd_T \ intermediate)
 
     return focal_to_pixel(wcs.pipeline, focal, Val(N))
 end
