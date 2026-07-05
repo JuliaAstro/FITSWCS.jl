@@ -14,8 +14,11 @@ using FITSWCS: pixel_to_intermediate, intermediate_to_pixel,
                NoDistortionPipeline, DistortionPipeline,
                pixel_to_focal, focal_to_pixel, has_distortion,
                LookupTable2D, interpolate_lookup_table,
+               TabularAxisSpec, TabularWCSData, NoTabularWCSData,
+               TabularWCSTable,
                NoAuxiliaryWCSData, AuxiliaryWCSData,
-               has_auxiliary, _auxiliary_wcs_data
+               has_auxiliary, _auxiliary_wcs_data,
+               _tabular_forward
 
 # Convenience shorthand
 const D2R = π / 180.0
@@ -62,6 +65,31 @@ function FITSWCS._auxiliary_wcs_data(header::AbstractDict, ::FakeCPDISInterpolat
     cpdis_x = LookupTable2D(x_data; crpix=(5, 10), crval=(10, 20), cdelt=(2, 2))
     cpdis_y = LookupTable2D(y_data; crpix=(5, 10), crval=(10, 20), cdelt=(3, 3))
     return AuxiliaryWCSData(cpdis=(cpdis_x, cpdis_y))
+end
+
+"""Fake FITS container that supplies a simple one-dimensional TAB table."""
+struct FakeTabularFobj end
+
+function FITSWCS._auxiliary_wcs_data(header::AbstractDict, ::FakeTabularFobj; alt::Char=' ', minerr::Real=0.0)
+    # Load a backend-neutral TAB payload without requiring a FITS table reader.
+    coords = Array{Float64}(undef, 2, 2, 2)
+    for k1 in 1:2, k2 in 1:2
+        coords[1, k1, k2] = 100.0 + 10.0 * k1 + k2
+        coords[2, k1, k2] = 200.0 + k1 + 10.0 * k2
+    end
+    tabular = FITSWCS._tabular_auxiliary_data(
+        header,
+        (extname, extver, extlev, column) -> begin
+            column == "FREQS" && return [10.0, 20.0, 40.0]
+            column == "PIXELS" && return [1.0, 2.0, 3.0]
+            column == "COORDS" && return coords
+            column == "XINDEX" && return [1.0, 2.0]
+            column == "YINDEX" && return [1.0, 2.0]
+            throw(KeyError(column))
+        end;
+        alt = alt,
+    )
+    return AuxiliaryWCSData(tabular = tabular)
 end
 
 @testset "FITSWCS" begin
@@ -414,24 +442,42 @@ end
         @test_throws ArgumentError WCS(hdr)
     end
 
-    @testset "Error: TAB lookup axes are explicitly unsupported" begin
-        # Paper III -TAB axes require table arrays, so they must not be treated as linear axes.
+    @testset "TAB lookup axes require external data" begin
+        # Paper III -TAB axes require table arrays, so header-only parsing must reject them.
         hdr = Dict(
             "NAXIS"  => 1,
             "CTYPE1" => "FREQ-TAB",
             "CRPIX1" => 1.0,
             "CRVAL1" => 1.0,
             "CDELT1" => 1.0,
+            "PS1_0"  => "WCS-TABLE",
+            "PS1_1"  => "FREQS",
         )
         @test_throws ArgumentError WCS(hdr)
+        @test_throws ArgumentError WCS(hdr; fobj=:unsupported)
 
         alt_hdr = Dict(
             "NAXIS"   => 1,
             "CTYPE1"  => "FREQ",
             "CTYPE1A" => "WAVE-TAB",
+            "PS1_0A"  => "WCS-TABLE",
+            "PS1_1A"  => "FREQS",
         )
         @test pixel_to_world(WCS(alt_hdr), [2.0]) ≈ [2.0]
         @test_throws ArgumentError WCS(alt_hdr; alt='A')
+
+        # TAB axis numbers must not exceed NAXIS.
+        bad_axis_hdr = Dict(
+            "NAXIS"  => 2,
+            "CTYPE1" => "RA---TAN",  "CTYPE2" => "DEC--TAN",
+            "CTYPE3" => "FREQ-TAB",
+            "CRPIX1" => 1.0, "CRPIX2" => 1.0, "CRPIX3" => 1.0,
+            "CRVAL1" => 0.0, "CRVAL2" => 0.0, "CRVAL3" => 1.0,
+            "CDELT1" => 1.0, "CDELT2" => 1.0, "CDELT3" => 1.0,
+            "PS3_0"  => "WCS-TABLE",
+            "PS3_1"  => "FREQS",
+        )
+        @test_throws ArgumentError WCS(bad_axis_hdr)
     end
 
     @testset "Error: non-linear spectral algorithms are explicitly unsupported" begin
@@ -901,6 +947,174 @@ end
     lookup_hdr["CPDIS1"] = "LOOKUP"
     @test_throws ArgumentError WCS(lookup_hdr)
     @test_throws ArgumentError WCS(lookup_hdr; fobj=:unsupported)
+end
+
+# ──────────────────────────────────────────────────────────────────────────────
+@testset "TAB auxiliary data and transforms" begin
+    # TAB axes should parse concrete specs and round-trip through interpolation.
+    hdr = Dict(
+        "NAXIS"  => 1,
+        "CTYPE1" => "FREQ-TAB",
+        "CRPIX1" => 1.0,
+        "CRVAL1" => 1.0,
+        "CDELT1" => 1.0,
+        "PS1_0"  => "WCS-TABLE",
+        "PS1_1"  => "FREQS",
+    )
+    indexed_hdr = copy(hdr)
+    indexed_hdr["PS1_2"] = "PIXELS"
+
+    specs = FITSWCS._tabular_axis_specs(hdr)
+    indexed_specs = FITSWCS._tabular_axis_specs(indexed_hdr)
+    @test only(specs) isa TabularAxisSpec{Nothing}
+    @test only(indexed_specs) isa TabularAxisSpec{String}
+
+    wcs = WCS(hdr; fobj=FakeTabularFobj())
+    @test wcs.aux.tabular isa TabularWCSData
+    @test pixel_to_world(wcs, [1.0]) ≈ [10.0]
+    @test pixel_to_world(wcs, [1.5]) ≈ [15.0]
+    @test pixel_to_world(wcs, [2.5]) ≈ [30.0]
+    @test world_to_pixel(wcs, [10.0]) ≈ [1.0]
+    @test world_to_pixel(wcs, [15.0]) ≈ [1.5]
+    @test world_to_pixel(wcs, [30.0]) ≈ [2.5]
+
+    pixels = reshape([1.0, 1.5, 2.5, 3.0], 1, 4)
+    worlds = reshape([10.0, 15.0, 30.0, 40.0], 1, 4)
+    @test pixel_to_world(wcs, pixels) ≈ worlds
+    @test world_to_pixel(wcs, worlds) ≈ pixels
+
+    indexed_wcs = WCS(indexed_hdr; fobj=FakeTabularFobj())
+    @test pixel_to_world(indexed_wcs, [2.5]) ≈ [30.0]
+    @test world_to_pixel(indexed_wcs, [30.0]) ≈ [2.5]
+
+    # 2D coupled TAB with a non-trivial CD matrix that includes scaling
+    # and rotation; the CD transform is applied before TAB lookup on both axes.
+    coupled_hdr = Dict(
+        "NAXIS"  => 2,
+        "CTYPE1" => "RA---TAB", "CTYPE2" => "DEC--TAB",
+        "CRPIX1" => 1.0, "CRPIX2" => 1.0,
+        "CRVAL1" => 1.0, "CRVAL2" => 1.0,
+        "CD1_1"  => 0.5, "CD1_2" => 0.1,
+        "CD2_1"  => -0.1, "CD2_2" => 0.5,
+        "PS1_0"  => "WCS-TABLE", "PS2_0" => "WCS-TABLE",
+        "PS1_1"  => "COORDS", "PS2_1" => "COORDS",
+        "PS1_2"  => "XINDEX", "PS2_2" => "YINDEX",
+        "PV1_3"  => 1, "PV2_3" => 2,
+        "LONPOLE" => 180.0,
+    )
+    coupled_wcs = WCS(coupled_hdr; fobj=FakeTabularFobj())
+    c_fw = pixel_to_world(coupled_wcs, [1.5, 1.5])
+    @test c_fw ≈ [114.2, 213.3]  atol=1e-10
+    c_bw = world_to_pixel(coupled_wcs, SVector{2,Float64}(c_fw[1], c_fw[2]))
+    @test c_bw ≈ [1.5, 1.5]  atol=1e-10
+
+    coupled_pixels = [1.0 1.5 2.0; 1.0 1.5 2.0]
+    coupled_worlds = [111.0 114.2 117.4; 211.0 213.3 215.6]
+    @test pixel_to_world(coupled_wcs, coupled_pixels) ≈ coupled_worlds  atol=1e-10
+    @test world_to_pixel(coupled_wcs, coupled_worlds) ≈ coupled_pixels  atol=1e-10
+
+    # 2D coupled TAB with default 1-based indexing (no PS?_2 keywords).
+    default_idx_hdr = Dict(
+        "NAXIS"  => 2,
+        "CTYPE1" => "RA---TAB", "CTYPE2" => "DEC--TAB",
+        "CRPIX1" => 1.0, "CRPIX2" => 1.0,
+        "CRVAL1" => 1.0, "CRVAL2" => 1.0,
+        "CDELT1" => 1.0, "CDELT2" => 1.0,
+        "PS1_0"  => "WCS-TABLE", "PS2_0" => "WCS-TABLE",
+        "PS1_1"  => "COORDS", "PS2_1" => "COORDS",
+        # No PS1_2 / PS2_2 — default 1-based indexing.
+        "PV1_3"  => 1, "PV2_3" => 2,
+        "LONPOLE" => 180.0,
+    )
+    default_wcs = WCS(default_idx_hdr; fobj=FakeTabularFobj())
+    dfw = pixel_to_world(default_wcs, [1.5, 1.5])
+    @test dfw ≈ [116.5, 216.5]  atol=1e-10
+    @test world_to_pixel(default_wcs, SVector{2,Float64}(dfw[1], dfw[2])) ≈ [1.5, 1.5]  atol=1e-10
+
+    # Mixed TAB + non-TAB: one ordinary linear axis and one TAB axis sharing a WCS.
+    mixed_hdr = Dict(
+        "NAXIS"  => 2,
+        "CTYPE1" => "LINEAR",
+        "CTYPE2" => "FREQ-TAB",
+        "CRPIX1" => 1.0, "CRPIX2" => 1.0,
+        "CRVAL1" => 0.0, "CRVAL2" => 1.0,
+        "CDELT1" => 1.0, "CDELT2" => 1.0,
+        "PS2_0"  => "WCS-TABLE",
+        "PS2_1"  => "FREQS",
+    )
+    mixed_wcs = WCS(mixed_hdr; fobj=FakeTabularFobj())
+    @test pixel_to_world(mixed_wcs, [1.5, 1.0]) ≈ [0.5, 10.0]
+    @test world_to_pixel(mixed_wcs, [0.5, 10.0]) ≈ [1.5, 1.0]
+
+    # Batch path for mixed TAB + non-TAB.
+    mixed_pixels = [1.0 1.5; 1.0 2.5]
+    mixed_worlds = [0.0 0.5; 10.0 30.0]
+    @test pixel_to_world(mixed_wcs, mixed_pixels) ≈ mixed_worlds
+    @test world_to_pixel(mixed_wcs, mixed_worlds) ≈ mixed_pixels
+
+    # Spectral cube: RA---TAN + DEC--TAN celestial projection with a FREQ-TAB
+    # spectral axis.  This is the dominant real-world use case for -TAB.
+    cube_hdr = Dict(
+        "NAXIS"  => 3,
+        "CTYPE1" => "RA---TAN", "CTYPE2" => "DEC--TAN", "CTYPE3" => "FREQ-TAB",
+        "CRPIX1" => 512.0, "CRPIX2" => 512.0, "CRPIX3" => 1.0,
+        "CRVAL1" => 83.8221, "CRVAL2" => -5.3911, "CRVAL3" => 1.0,
+        "CD1_1"  => -2.7778e-4, "CD1_2" => 5.5556e-5, "CD1_3" => 0.0,
+        "CD2_1"  => 5.5556e-5, "CD2_2" => 2.7778e-4, "CD2_3" => 0.0,
+        "CD3_1"  => 0.0, "CD3_2" => 0.0, "CD3_3" => 1.0,
+        "PS3_0"  => "WCS-TABLE",
+        "PS3_1"  => "FREQS",
+        "LONPOLE" => 180.0,
+    )
+    cube_wcs = WCS(cube_hdr; fobj=FakeTabularFobj())
+    # At the reference pixel: spatial coords return CRVAL, spectral returns
+    # the first coordinate-array entry.  Matches astropy all_pix2world exactly.
+    @test pixel_to_world(cube_wcs, [512.0, 512.0, 1.0]) ≈ [83.8221, -5.3911, 10.0]
+    # Spectral interpolation between coordinate-array entries.
+    @test pixel_to_world(cube_wcs, [512.0, 512.0, 1.5]) ≈ [83.8221, -5.3911, 15.0]
+    # Spatial offset with rotation in the CD matrix; the spectral axis is unchanged.
+    fw_spatial = pixel_to_world(cube_wcs, [612.0, 512.0, 1.0])
+    @test fw_spatial[1] ≈ 83.79419883756202  atol=1e-10
+    @test fw_spatial[2] ≈ -5.385543765216007  atol=1e-10
+    @test fw_spatial[3] ≈ 10.0
+    # Round-trip at the reference point.
+    cube_bw = world_to_pixel(cube_wcs, SVector{3,Float64}(83.8221, -5.3911, 10.0))
+    @test cube_bw ≈ [512.0, 512.0, 1.0]
+    # Round-trip with spectral interpolation.
+    cube_bw2 = world_to_pixel(cube_wcs, SVector{3,Float64}(83.8221, -5.3911, 15.0))
+    @test cube_bw2 ≈ [512.0, 512.0, 1.5]
+    # Batch round-trip.
+    batch_pix = [512.0 512.0 612.0; 512.0 512.0 512.0; 1.0 1.5 1.0]
+    batch_world = pixel_to_world(cube_wcs, batch_pix)
+    batch_round = world_to_pixel(cube_wcs, batch_world)
+    @test batch_round ≈ batch_pix  atol=1e-10
+end
+
+# ──────────────────────────────────────────────────────────────────────────────
+@testset "TAB high-dimensional fallback (M=5)" begin
+    # The runtime-M construction path must produce a correctly typed table that
+    # _tabular_forward can interpolate over.
+    data = Array{Float64}(undef, 5, 2, 2, 2, 2, 2)
+    for i1 in 1:2, i2 in 1:2, i3 in 1:2, i4 in 1:2, i5 in 1:2
+        data[1, i1, i2, i3, i4, i5] = Float64(i1 + 2*i2 + 3*i3 + 4*i4 + 5*i5)
+        for c in 2:5
+            data[c, i1, i2, i3, i4, i5] = 0.0
+        end
+    end
+    indices = [Float64[1.0, 2.0] for _ in 1:5]
+    M = 5
+    axes = SVector{M, Int}(i for i in 1:5)
+    table_axes = SVector{M, Int}(i for i in 1:5)
+    table = TabularWCSTable{M, typeof(data), typeof(indices)}(axes, table_axes, data, indices)
+    @test typeof(table).parameters[1] == 5
+
+    # Evaluate at the centre of the coordinate array.
+    result = _tabular_forward(table, Float64[0.0, 0.0, 0.0, 0.0, 0.0],
+                              Float64[1.0, 1.0, 1.0, 1.0, 1.0])
+    @test result isa NTuple{5, Float64}
+    @test result[1] ≈ 15.0
+    # Components 2-5 are all zero in the test data.
+    @test all(iszero, result[2:5])
 end
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -1664,6 +1878,32 @@ end
             @test pixel_to_world(lookup_wcs, [1.0, 1.0]) ≈ [0.5, 0.25]
             @test world_to_pixel(lookup_wcs, [0.5, 0.25]) ≈ [1.0, 1.0]
             @test world_to_pixel(lookup_wcs, reshape([0.5, 0.25], 2, 1)) ≈ reshape([1.0, 1.0], 2, 1)
+
+            tab_header = FITSIO.FITSHeader(
+                [
+                    "NAXIS", "CTYPE1", "CRPIX1", "CRVAL1", "CDELT1",
+                    "PS1_0", "PS1_1", "PS1_2",
+                ],
+                [
+                    1, "FREQ-TAB", 1.0, 1.0, 1.0,
+                    "WCS-TABLE", "FREQS", "PIXELS",
+                ],
+                fill("", 8),
+            )
+            FITSIO.write(
+                file,
+                ["FREQS", "PIXELS"],
+                Any[
+                    reshape([10.0, 20.0, 40.0], 3, 1),
+                    reshape([1.0, 2.0, 3.0], 3, 1),
+                ];
+                name = "WCS-TABLE",
+            )
+
+            tab_wcs = WCS(tab_header; fobj=file)
+            @test tab_wcs.aux.tabular isa TabularWCSData
+            @test pixel_to_world(tab_wcs, [2.5]) ≈ [30.0]
+            @test world_to_pixel(tab_wcs, [30.0]) ≈ [2.5]
         end
     end
 end
@@ -1752,6 +1992,32 @@ end
     @test pixel_to_world(lookup_wcs, [1.0, 1.0]) ≈ [0.5, 0.25]
     @test world_to_pixel(lookup_wcs, [0.5, 0.25]) ≈ [1.0, 1.0]
     @test world_to_pixel(lookup_wcs, reshape([0.5, 0.25], 2, 1)) ≈ reshape([1.0, 1.0], 2, 1)
+
+    tab_cards = FITSFiles.Card[
+        FITSFiles.Card("SIMPLE", true),
+        FITSFiles.Card("BITPIX", -32),
+        FITSFiles.Card("NAXIS", 1),
+        FITSFiles.Card("NAXIS1", 3),
+        FITSFiles.Card("CTYPE1", "FREQ-TAB"),
+        FITSFiles.Card("CRPIX1", 1.0),
+        FITSFiles.Card("CRVAL1", 1.0),
+        FITSFiles.Card("CDELT1", 1.0),
+        FITSFiles.Card("PS1_0", "WCS-TABLE"),
+        FITSFiles.Card("PS1_1", "FREQS"),
+        FITSFiles.Card("PS1_2", "PIXELS"),
+    ]
+    tab_hdu = FITSFiles.HDU(tab_cards)
+    table_hdu = FITSFiles.HDU(
+        (FREQS = [10.0, 20.0, 40.0], PIXELS = [1.0, 2.0, 3.0]),
+        [
+            FITSFiles.Card("EXTNAME", "WCS-TABLE"),
+            FITSFiles.Card("EXTVER", 1),
+        ],
+    )
+    tab_wcs = WCS(tab_hdu; fobj=[tab_hdu, table_hdu])
+    @test tab_wcs.aux.tabular isa TabularWCSData
+    @test pixel_to_world(tab_wcs, [2.5]) ≈ [30.0]
+    @test world_to_pixel(tab_wcs, [30.0]) ≈ [2.5]
 end
 
 # ──────────────────────────────────────────────────────────────────────────────

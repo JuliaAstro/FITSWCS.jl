@@ -22,7 +22,7 @@ struct AuxiliaryWCSData{D, C, T} <: AbstractAuxiliaryWCSData
     tabular::T
 end
 
-AuxiliaryWCSData(; det2im = (nothing, nothing), cpdis = (nothing, nothing), tabular = nothing) =
+AuxiliaryWCSData(; det2im = (nothing, nothing), cpdis = (nothing, nothing), tabular = NoTabularWCSData()) =
     AuxiliaryWCSData(det2im, cpdis, tabular)
 
 struct PaperIVLookupSpec
@@ -114,6 +114,25 @@ function _paper_iv_auxiliary_data(header::AbstractDict, loader; alt::Char = ' ',
         return NoAuxiliaryWCSData()
     end
     return AuxiliaryWCSData(det2im = det2im, cpdis = cpdis)
+end
+
+function _external_auxiliary_data(
+        header::AbstractDict,
+        paper_iv_loader,
+        tabular_loader;
+        alt::Char = ' ',
+        minerr::Real = 0.0,
+    )
+    paper_iv = _paper_iv_auxiliary_data(header, paper_iv_loader; alt = alt, minerr = minerr)
+    tabular = _tabular_auxiliary_data(header, tabular_loader; alt = alt)
+
+    # Preserve the cheap no-auxiliary payload when neither external family is present.
+    paper_iv isa NoAuxiliaryWCSData && tabular isa NoTabularWCSData &&
+        return NoAuxiliaryWCSData()
+
+    det2im = paper_iv isa AuxiliaryWCSData ? paper_iv.det2im : (nothing, nothing)
+    cpdis = paper_iv isa AuxiliaryWCSData ? paper_iv.cpdis : (nothing, nothing)
+    return AuxiliaryWCSData(det2im = det2im, cpdis = cpdis, tabular = tabular)
 end
 
 function _header_references_tabular_axis(header::AbstractDict, alt_str::AbstractString)

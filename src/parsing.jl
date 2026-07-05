@@ -79,12 +79,12 @@ end
 """
 Known longitude axis coordinate system prefixes.
 """
-const _LON_SYSTEMS = Set(["RA", "GLON", "ELON", "HLON", "SLON", "TLON"])
+const _LON_SYSTEMS = Set(["RA", "GLON", "ELON", "HLON", "SLON", "HPLN"])
 
 """
 Known latitude axis coordinate system prefixes.
 """
-const _LAT_SYSTEMS = Set(["DEC", "GLAT", "ELAT", "HLAT", "SLAT", "TLAT"])
+const _LAT_SYSTEMS = Set(["DEC", "GLAT", "ELAT", "HLAT", "SLAT", "HPLT"])
 
 """
     parse_ctype(ctype_str) -> (system, coord_type, proj_code)
@@ -402,26 +402,11 @@ function _fix_scamp_compatibility!(header::AbstractDict, alt_str::AbstractString
     _remove_sip_keywords!(header, alt_str)
 end
 
-function reject_tabular_axes(ctype::Vector{String})
-    # Detect Paper III tabular-coordinate axes before they can be linearized.
-    for (i, ctype_i) in pairs(ctype)
-        _, _, pc = parse_ctype(ctype_i)
-        if pc == "TAB"
-            throw(ArgumentError(
-                "CTYPE$(i)=$(repr(ctype_i)) uses -TAB lookup coordinates, " *
-                "which are not implemented yet"
-            ))
-        end
-    end
-
-    return nothing
-end
-
 function reject_unsupported_nonlinear_axes(ctype::Vector{String})
     # Non-celestial algorithm-coded axes need Paper III or domain-specific logic.
     for (i, ctype_i) in pairs(ctype)
         _, coord_type, pc = parse_ctype(ctype_i)
-        if coord_type == :linear && !isempty(pc)
+        if coord_type == :linear && !isempty(pc) && pc != "TAB"
             throw(ArgumentError(
                 "CTYPE$(i)=$(repr(ctype_i)) uses unsupported algorithm code " *
                 "$(repr(pc)); only plain linear non-celestial axes are implemented"
@@ -457,6 +442,12 @@ function _wcs_axis_indices(key::AbstractString, alt_str::AbstractString)
 
     # Numeric projection parameters are attached to one WCS axis.
     m = match(r"^PV([1-9][0-9]*)_([0-9]|[1-9][0-9])$", core)
+    if m !== nothing
+        return [parse(Int, m.captures[1])]
+    end
+
+    # Paper III tabular / spectral parameters also carry one WCS axis.
+    m = match(r"^PS([1-9][0-9]*)_([0-9]+)$", core)
     if m !== nothing
         return [parse(Int, m.captures[1])]
     end
@@ -672,7 +663,6 @@ function WCS(header::AbstractDict; fobj = nothing, alt::Char = ' ', minerr::Real
         ctype[i] = String(get(header, "CTYPE$(i)$(alt_str)", ""))
         cunit[i] = String(get(header, "CUNIT$(i)$(alt_str)", ""))
     end
-    reject_tabular_axes(ctype)
     reject_unsupported_nonlinear_axes(ctype)
 
     # ── Parse CTYPE to determine projection and axis roles ────────────────────
@@ -682,6 +672,7 @@ function WCS(header::AbstractDict; fobj = nothing, alt::Char = ' ', minerr::Real
 
     for i in 1:naxis
         _, coord_type, pc = parse_ctype(ctype[i])
+        pc == "TAB" && continue
         if coord_type == :lon
             if lon_axis != 0
                 throw(ArgumentError("header has multiple longitude axes (CTYPE$(lon_axis) and CTYPE$(i))"))

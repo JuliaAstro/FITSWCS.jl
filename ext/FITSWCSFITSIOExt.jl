@@ -5,9 +5,9 @@ import FITSWCS:
     WCS,
     NoAuxiliaryWCSData,
     _auxiliary_wcs_data,
+    _external_auxiliary_data,
     _header_references_external_wcs_data,
-    _lookup_table_from_image,
-    _paper_iv_auxiliary_data
+    _lookup_table_from_image
 
 """
     _fitsio_parameter_card(value)
@@ -55,13 +55,18 @@ function _fitsio_auxiliary_wcs_data(header::AbstractDict, fobj; alt::Char = ' ',
     # Keep the common header-only path cheap even when a FITSIO object is supplied.
     _header_references_external_wcs_data(header, alt_str) || return NoAuxiliaryWCSData()
 
-    # Load referenced Paper IV image extensions and copy them into backend-neutral tables.
-    return _paper_iv_auxiliary_data(
-        header, spec -> begin
+    # Load referenced external arrays and copy them into backend-neutral tables.
+    return _external_auxiliary_data(
+        header,
+        spec -> begin
             hdu = fobj[spec.extname, spec.extver]
             data = FITSIO.read(hdu)
             table_header = _fitsio_header_dict(FITSIO.read_header(hdu))
             _lookup_table_from_image(data, table_header, spec.transpose)
+        end,
+        (extname, extver, extlev, column) -> begin
+            hdu = fobj[extname, extver]
+            return FITSIO.read(hdu, String(column))
         end; alt = alt, minerr = minerr
     )
 end
