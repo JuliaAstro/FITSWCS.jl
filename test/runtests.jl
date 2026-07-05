@@ -18,7 +18,7 @@ using FITSWCS: pixel_to_intermediate, intermediate_to_pixel,
                TabularWCSTable,
                NoAuxiliaryWCSData, AuxiliaryWCSData,
                has_auxiliary, _auxiliary_wcs_data,
-               _tabular_forward
+               _tabular_forward, _tabular_inverse
 
 # Convenience shorthand
 const D2R = π / 180.0
@@ -1121,6 +1121,38 @@ end
     @test result[1] ≈ 15.0
     # Components 2-5 are all zero in the test data.
     @test all(iszero, result[2:5])
+end
+
+# ──────────────────────────────────────────────────────────────────────────────
+@testset "TAB M=3 coupled inverse (Newton path)" begin
+    # Exercise _tabular_inverse_newton with a 3D coupled coordinate array.
+    coord = Array{Float64}(undef, 3, 2, 2, 2)
+    for k1 in 1:2, k2 in 1:2, k3 in 1:2
+        coord[1, k1, k2, k3] = 100.0 + 10*k1 + k2 + 0.5*k3
+        coord[2, k1, k2, k3] = 200.0 + k1 + 10*k2 + 0.5*k3
+        coord[3, k1, k2, k3] = 1000.0 + k1 + k2 + 100*k3
+    end
+    indices = [Float64[1.0, 2.0] for _ in 1:3]
+    table = TabularWCSTable{3, typeof(coord), typeof(indices)}(
+        SVector{3, Int}(1, 2, 3), SVector{3, Int}(1, 2, 3), coord, indices)
+    crval = Float64[1.0, 1.0, 1.0]
+
+    # Corner: all three components land exactly on a grid point.
+    fwd = _tabular_forward(table, Float64[1.0, 1.0, 1.0], crval)
+    @test fwd == (123.0, 223.0, 1204.0)
+    inv = _tabular_inverse(table, SVector{3, Float64}(fwd...), crval)
+    @test inv ≈ [1.0, 1.0, 1.0]
+
+    # Interior point round-trip.
+    fwd2 = _tabular_forward(table, Float64[0.5, 0.5, 0.5], crval)
+    inv2 = _tabular_inverse(table, SVector{3, Float64}(fwd2...), crval)
+    @test inv2 ≈ [0.5, 0.5, 0.5]  atol=1e-10
+
+    # Float32 preservation through the Newton path.
+    fwd3 = _tabular_forward(table, Float32[0.5, 0.5, 0.5], crval)
+    inv3 = _tabular_inverse(table, SVector{3, Float32}(fwd3...), crval)
+    @test eltype(inv3) == Float32
+    @test inv3 ≈ Float32[0.5, 0.5, 0.5]  atol=1e-5
 end
 
 # ──────────────────────────────────────────────────────────────────────────────
