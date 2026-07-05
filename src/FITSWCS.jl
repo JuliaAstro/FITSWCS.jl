@@ -43,7 +43,6 @@ module FITSWCS
 using LinearAlgebra: I, \
 using StaticArrays: SMatrix, SVector, StaticVector, MVector, MMatrix
 
-include("units.jl")
 include("utilities.jl")
 include("projections.jl")
 include("lookup_tables.jl")
