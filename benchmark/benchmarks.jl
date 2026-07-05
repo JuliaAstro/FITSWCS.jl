@@ -277,8 +277,10 @@ let g = SUITE["pixel_to_world"]
     g["3D-cube/scalar"] = @benchmarkable pixel_to_world($WCS_CUBE, $_pix_cube) evals=100
     g["3D-cube-TAB/scalar"] = @benchmarkable pixel_to_world($WCS_CUBE_TAB, $_pix_cube_tab) evals=100
     g["2D-coupled-TAB/scalar"] = @benchmarkable pixel_to_world($WCS_COUPLED_TAB, $_pix_coupled_tab) evals=100
-    g["TAN/batch-100"] = @benchmarkable pixel_to_world($WCS_TAN, $_batch_pix) evals=1
-    g["TAN/batch-1M"] = @benchmarkable pixel_to_world($WCS_TAN, $_batch_pix_1M) evals=1
+    g["TAN/batch-100/Float64"] = @benchmarkable pixel_to_world($WCS_TAN, $_batch_pix) evals=1
+    g["TAN/batch-100/Float32"] = @benchmarkable pixel_to_world($WCS_TAN, $(Float32.(_batch_pix))) evals=1
+    g["TAN/batch-1M/Float64"] = @benchmarkable pixel_to_world($WCS_TAN, $_batch_pix_1M) evals=1
+    g["TAN/batch-1M/Float32"] = @benchmarkable pixel_to_world($WCS_TAN, $(Float32.(_batch_pix_1M))) evals=1
     g["3D-cube-TAB/batch-100"] = @benchmarkable pixel_to_world($WCS_CUBE_TAB, $_batch_pix_cube_tab) evals=1
 end
 
@@ -293,8 +295,10 @@ let g = SUITE["world_to_pixel"]
     g["3D-cube/scalar"] = @benchmarkable world_to_pixel($WCS_CUBE, $_world_cube) evals=100
     g["3D-cube-TAB/scalar"] = @benchmarkable world_to_pixel($WCS_CUBE_TAB, $_world_cube_tab) evals=100
     g["2D-coupled-TAB/scalar"] = @benchmarkable world_to_pixel($WCS_COUPLED_TAB, $_world_coupled_tab) evals=100
-    g["TAN/batch-100"] = @benchmarkable world_to_pixel($WCS_TAN, $_batch_world) evals=1
-    g["TAN/batch-1M"] = @benchmarkable world_to_pixel($WCS_TAN, $_batch_world_1M) evals=1
+    g["TAN/batch-100/Float64"] = @benchmarkable world_to_pixel($WCS_TAN, $_batch_world) evals=1
+    g["TAN/batch-100/Float32"] = @benchmarkable world_to_pixel($WCS_TAN, $(Float32.(_batch_world))) evals=1
+    g["TAN/batch-1M/Float64"] = @benchmarkable world_to_pixel($WCS_TAN, $_batch_world_1M) evals=1
+    g["TAN/batch-1M/Float32"] = @benchmarkable world_to_pixel($WCS_TAN, $(Float32.(_batch_world_1M))) evals=1
     g["3D-cube-TAB/batch-100"] = @benchmarkable world_to_pixel($WCS_CUBE_TAB, $_batch_world_cube_tab) evals=1
 end
 
