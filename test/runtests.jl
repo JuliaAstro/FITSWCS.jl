@@ -1088,6 +1088,12 @@ end
     batch_world = pixel_to_world(cube_wcs, batch_pix)
     batch_round = world_to_pixel(cube_wcs, batch_world)
     @test batch_round ≈ batch_pix  atol=1e-10
+
+    # Float32 input must be preserved through the TAB pipeline.
+    @test eltype(pixel_to_world(wcs, Float32[1.5])) == Float32
+    @test eltype(pixel_to_world(coupled_wcs, Float32[1.5, 1.5])) == Float32
+    @test eltype(world_to_pixel(wcs, SVector{1,Float32}(15.0))) == Float32
+    @test eltype(world_to_pixel(coupled_wcs, SVector{2,Float32}(116.5, 216.5))) == Float32
 end
 
 # ──────────────────────────────────────────────────────────────────────────────

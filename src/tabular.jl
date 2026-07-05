@@ -369,74 +369,235 @@ function _tabular_inverse_1d(table::TabularWCSTable{M}, world_value::Real, crval
     return psi - crval
 end
 
-function _tabular_initial_guess(table::TabularWCSTable{M}, target::AbstractVector, crval::AbstractVector) where {M}
-    table_shape = size(table.coord)[2:end]
-    best = fill(0.0, M)
-    best_r = Inf
+# ── M=2 bilinear cell-scan ──────────────────────────────────────────────────
 
-    # Use the nearest coordinate-array vertex as a robust starting point.
-    for index in CartesianIndices(table_shape)
-        r = 0.0
+"""
+    _tabular_inverse_bilinear(table::TabularWCSTable{2}, world, crval)
+
+Invert a two-dimensional `-TAB` lookup by scanning coordinate-array cells
+for the one whose bilinear map contains the target world coordinate, then
+solving the bilinear system in closed form.
+
+The bilinear map within cell ``(k_1, k_2)`` is
+``f(u,v) = a + b·u + c·v + d·u·v`` where ``u,v ∈ [0,1]``.
+Substituting ``u = (r₁ - c₁·v) / (b₁ + d₁·v)`` into the second component
+yields a quadratic in ``v``, solved by the quadratic formula.  Two degenerate
+cases are handled explicitly: purely linear cells (``d₁ = d₂ = 0``) and
+cells where one cross-term vanishes.
+"""
+function _tabular_inverse_bilinear(table::TabularWCSTable{2}, world::AbstractVector, crval::AbstractVector)
+    T = _coordinate_float_type(world)
+    axis1 = table.axes[1]
+    axis2 = table.axes[2]
+    t1 = T(world[axis1])
+    t2 = T(world[axis2])
+    K1 = size(table.coord, 2)
+    K2 = size(table.coord, 3)
+    tol = _convergence_tol(T)
+    idx1 = table.indices[1]
+    idx2 = table.indices[2]
+
+    for k1 in 1:K1-1, k2 in 1:K2-1
+        a1 = table.coord[1, k1, k2]
+        a2 = table.coord[2, k1, k2]
+        b1 = table.coord[1, k1+1, k2] - a1
+        b2 = table.coord[2, k1+1, k2] - a2
+        c1 = table.coord[1, k1, k2+1] - a1
+        c2 = table.coord[2, k1, k2+1] - a2
+        d1 = table.coord[1, k1+1, k2+1] - a1 - b1 - c1
+        d2 = table.coord[2, k1+1, k2+1] - a2 - b2 - c2
+        r1 = t1 - a1
+        r2 = t2 - a2
+
+        uv = _solve_bilinear_cell(b1, b2, c1, c2, d1, d2, r1, r2, tol)
+        uv === nothing && continue
+        u, v = uv
+
+        psi1 = _tabular_index_value(idx1, k1 + u)
+        psi2 = _tabular_index_value(idx2, k2 + v)
+        return SVector{2, T}(
+            psi1 - T(crval[axis1]),
+            psi2 - T(crval[axis2]))
+    end
+
+    throw(ArgumentError("TAB inverse: target not found in any cell"))
+end
+
+"""
+    _solve_bilinear_cell(b1, b2, c1, c2, d1, d2, r1, r2, tol)
+
+Solve ``r₁ = b₁·u + c₁·v + d₁·u·v``, ``r₂ = b₂·u + c₂·v + d₂·u·v``
+for ``(u,v)`` in closed form.
+
+`tol` is the threshold below which cross-term coefficients ``d₁, d₂`` are
+treated as zero, routing to the purely-linear 2×2 solve.  It also guards
+against near-singular denominators (``b₁ + d₁·v ≈ 0``).
+We recommend using `_convergence_tol` to set this.
+
+Returns `(u, v)` if a solution exists within the cell (with minor
+extrapolation tolerance ±0.5), or `nothing` otherwise.
+"""
+function _solve_bilinear_cell(b1, b2, c1, c2, d1, d2, r1, r2, tol)
+    # Purely linear cell: no cross-terms.
+    if abs(d1) < tol && abs(d2) < tol
+        det = b1*c2 - b2*c1
+        abs(det) < tol && return nothing
+        u = (c2*r1 - c1*r2) / det
+        v = (b1*r2 - b2*r1) / det
+        return (-0.5 <= u <= 1.5 && -0.5 <= v <= 1.5) ? (u, v) : nothing
+    end
+
+    # d₁ ≠ 0: solve  u = (r₁ − c₁·v) / (b₁ + d₁·v)  → quadratic in v.
+    #   A·v² + B·v + C = 0
+    #   A = c₂·d₁ − d₂·c₁
+    #   B = c₂·b₁ + d₂·r₁ − r₂·d₁ − b₂·c₁
+    #   C = b₂·r₁ − r₂·b₁
+    if abs(d1) >= tol
+        A = c2*d1 - d2*c1
+        B = c2*b1 + d2*r1 - r2*d1 - b2*c1
+        C = b2*r1 - r2*b1
+
+        if abs(A) < tol
+            # Degenerate: quadratic → linear.
+            abs(B) < tol && return nothing
+            v = -C / B
+            denom = b1 + d1*v
+            abs(denom) < tol && return nothing
+            u = (r1 - c1*v) / denom
+            return (-0.5 <= u <= 1.5 && -0.5 <= v <= 1.5) ? (u, v) : nothing
+        end
+
+        disc = B*B - 4*A*C
+        disc < 0 && return nothing
+        sqrt_disc = sqrt(disc)
+
+        for v in ((-B + sqrt_disc) / (2*A), (-B - sqrt_disc) / (2*A))
+            denom = b1 + d1*v
+            if abs(denom) > tol
+                u = (r1 - c1*v) / denom
+                if -0.5 <= u <= 1.5 && -0.5 <= v <= 1.5
+                    return (u, v)
+                end
+            end
+        end
+        return nothing
+    end
+
+    # d₁ = 0, d₂ ≠ 0: solve  v = (r₂ − b₂·u) / (c₂ + d₂·u)  → quadratic in u.
+    # Symmetric to above with (b ↔ c, 1 ↔ 2):
+    A = b1*d2
+    B = b1*c2 - r1*d2 - c1*b2
+    C = c1*r2 - r1*c2
+
+    if abs(A) < tol
+        abs(B) < tol && return nothing
+        u = -C / B
+        denom = c2 + d2*u
+        abs(denom) < tol && return nothing
+        v = (r2 - b2*u) / denom
+        return (-0.5 <= u <= 1.5 && -0.5 <= v <= 1.5) ? (u, v) : nothing
+    end
+
+    disc = B*B - 4*A*C
+    disc < 0 && return nothing
+    sqrt_disc = sqrt(disc)
+
+    for u in ((-B + sqrt_disc) / (2*A), (-B - sqrt_disc) / (2*A))
+        denom = c2 + d2*u
+        if abs(denom) > tol
+            v = (r2 - b2*u) / denom
+            if -0.5 <= u <= 1.5 && -0.5 <= v <= 1.5
+                return (u, v)
+            end
+        end
+    end
+    return nothing
+end
+
+# ── General-M Newton solver ─────────────────────────────────────────────────
+
+"""
+    _tabular_inverse_newton(table::TabularWCSTable{M}, world, crval)
+
+Invert a multi-dimensional (M ≥ 3) `-TAB` lookup via Newton-Raphson iteration
+with a finite-difference Jacobian.
+
+A starting point is obtained by scanning the coordinate-array vertices for the
+one nearest to the target world coordinate in Euclidean distance.  The Newton
+iteration then refines this estimate using the piecewise-multilinear forward
+map.  All work arrays are stack-allocated via `MVector` / `MMatrix`.
+"""
+function _tabular_inverse_newton(table::TabularWCSTable{M}, world::AbstractVector, crval::AbstractVector) where {M}
+    T = _coordinate_float_type(world)
+    target = SVector{M, T}(T(world[axis]) for axis in table.axes)
+
+    # Nearest-vertex initial guess.
+    vars = MVector{M, T}(undef)
+    best_r = typemax(T)
+    for index in CartesianIndices(size(table.coord)[2:end])
+        r = zero(T)
         for component in 1:M
-            residual = table.coord[component, Tuple(index)...] - target[component]
+            residual = T(table.coord[component, Tuple(index)...] - target[component])
             r += residual^2
         end
         if r < best_r
             best_r = r
             for m in 1:M
-                best[m] = table.indices[m][index[m]] - crval[table.axes[m]]
+                vars[m] = T(table.indices[m][index[m]] - crval[table.axes[m]])
             end
         end
     end
 
-    return best
-end
+    max_axis = maximum(table.axes)
+    trial = zeros(T, max_axis)
+    tol = _convergence_tol(T)
+    h_base = sqrt(eps(T))
+    residual = MVector{M, T}(undef)
+    step = MVector{M, T}(undef)
 
-function _tabular_inverse_coupled(table::TabularWCSTable{M}, world::AbstractVector, crval::AbstractVector) where {M}
-    target = [Float64(world[axis]) for axis in table.axes]
-    vars = _tabular_initial_guess(table, target, crval)
-    trial = zeros(Float64, maximum(table.axes))
-    max_iter = 32
-    tol = _convergence_tol(Float64)
-
-    for _ in 1:max_iter
-        # Evaluate the residual at the current intermediate-coordinate estimate.
-        for (m, axis) in pairs(table.axes)
-            trial[axis] = vars[m]
+    for _ in 1:32
+        # Evaluate forward at current estimate.
+        @inbounds for m in 1:M
+            trial[table.axes[m]] = vars[m]
         end
-        values = collect(_tabular_forward(table, trial, crval))
-        residual = values .- target
-        sqrt(sum(abs2, residual)) <= tol && return vars
+        values = _tabular_forward(table, trial, crval)
+        @inbounds for m in 1:M
+            residual[m] = T(values[m]) - target[m]
+        end
+        sum(abs2, residual) <= tol^2 && return vars
 
-        # Build a finite-difference Jacobian for the coupled TAB forward map.
-        jac = MMatrix{M, M, Float64}(undef)
-        for m in 1:M
-            h = sqrt(eps(Float64)) * max(abs(vars[m]), 1.0)
-            psi = vars[m] + crval[table.axes[m]]
+        # Finite-difference Jacobian.
+        jac = MMatrix{M, M, T}(undef)
+        @inbounds for m in 1:M
+            h = h_base * max(abs(vars[m]), one(T))
+            psi = vars[m] + T(crval[table.axes[m]])
             if psi >= maximum(table.indices[m])
                 h = -h
             elseif psi <= minimum(table.indices[m])
                 h = abs(h)
             end
             trial[table.axes[m]] = vars[m] + h
-            shifted = collect(_tabular_forward(table, trial, crval))
+            shifted = _tabular_forward(table, trial, crval)
             for row in 1:M
-                jac[row, m] = (shifted[row] - values[row]) / h
+                jac[row, m] = (T(shifted[row]) - T(values[row])) / h
             end
             trial[table.axes[m]] = vars[m]
         end
 
-        step = try
+        step_vec = try
             jac \ residual
         catch
             break
         end
+        @inbounds for m in 1:M
+            step[m] = step_vec[m]
+        end
         vars .-= step
-        sqrt(sum(abs2, step)) <= tol && return vars
+        sum(abs2, step) <= tol^2 && return vars
     end
 
     @warn "coupled TAB inverse failed to converge; returning best estimate"
-    return vars
+    return SVector{M, T}(vars)
 end
 
 """
@@ -449,19 +610,22 @@ containing each world value, then inverts through the index vector to recover
 ``psi_m``; the returned value is ``psi_m - crval[axis_m]``, i.e. the intermediate
 coordinate without the reference offset.
 
-For coupled multi-dimensional tables a Newton-Raphson iteration with a
-finite-difference Jacobian is used, initialised from the nearest coordinate-array
-vertex.  Convergence is tested against `_convergence_tol(Float64)` with a maximum
-of 32 iterations; if the iteration stalls a warning is emitted and the best
-estimate seen so far is returned.
+For two-dimensional tables a bilinear cell scan solves the inverse in closed
+form via the quadratic formula.
+
+For higher-dimensional tables a Newton-Raphson iteration with a finite-difference
+Jacobian is used, initialised from the nearest coordinate-array vertex.
 
 Returns a vector of intermediate coordinate values, one per table axis, in the
 same order as `table.axes`.
 """
 function _tabular_inverse(table::TabularWCSTable{M}, world::AbstractVector, crval::AbstractVector) where {M}
+    T = _coordinate_float_type(world)
     if M == 1
         axis = only(table.axes)
-        return [_tabular_inverse_1d(table, world[axis], crval[axis])]
+        return SVector{1, T}(_tabular_inverse_1d(table, world[axis], crval[axis]))
+    elseif M == 2
+        return _tabular_inverse_bilinear(table, world, crval)
     end
-    return _tabular_inverse_coupled(table, world, crval)
+    return _tabular_inverse_newton(table, world, crval)
 end
