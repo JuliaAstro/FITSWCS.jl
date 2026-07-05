@@ -73,6 +73,22 @@ Celestial units are normalized to degrees at the public API boundary.  Linear,
 spectral, time, and Stokes axes currently remain in the units encoded by their
 header linear transform.
 
+## Supported Celestial Coordinate Systems
+
+Celestial axes are identified by their CTYPE prefix:
+
+| System | Longitude | Latitude | Description |
+|---|---|---|---|
+| Equatorial | `RA` | `DEC` | Right ascension / declination |
+| Galactic | `GLON` | `GLAT` | Galactic longitude / latitude |
+| Ecliptic | `ELON` | `ELAT` | Ecliptic longitude / latitude |
+| Helioecliptic | `HLON` | `HLAT` | Helioecliptic longitude / latitude |
+| Supergalactic | `SLON` | `SLAT` | Supergalactic longitude / latitude |
+| Helioprojective | `HPLN` | `HPLT` | Solar helioprojective longitude / latitude |
+
+All six systems share the same spherical projection and rotation machinery;
+only the fiducial native-pole coordinates differ.
+
 ## Supported Projections
 
 All 28 WCSLIB spherical projections are implemented and checked against stored
@@ -111,7 +127,10 @@ weak dependency; both loader-specific methods are still isolated in extensions.
 - **Paper III spectral algorithms**: plain linear spectral axes work, but
   algorithm-coded axes such as `FREQ-LOG`, `WAVE-F2W`, etc. throw an explicit
   parse error.
-- **`-TAB` table-lookup axes**: throw an explicit parse error.
+- **`-TAB` table-lookup axes**: forward (pixel → world) and 1D inverse
+  transforms are supported, including coupled multi-dimensional coordinate
+  arrays and index-vector lookups.  Coupled multi-dimensional inverse
+  (world → pixel) uses a Newton–Raphson iteration and may warn if it stalls.
 - **Paper IV distortion lookup tables** (`CPDIS`, `D2IMDIS`, `D2IMERR`,
   `AXISCORR`, `DP`, `DQ`): throw an explicit parse error.
 - **Iterative inverse distortions**: SIP without inverse `AP` / `BP`

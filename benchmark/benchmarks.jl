@@ -159,18 +159,95 @@ const _hdr_cube = Dict(
 )
 const WCS_CUBE = WCS(_hdr_cube)
 
+# ── Spectral cube with -TAB ──────────────────────────────────────────────────
+
+"""Synthetic in-memory auxiliary-data source for 3D TAB spectral-cube benchmarks."""
+struct BenchmarkTabularFobj end
+
+function FITSWCS._auxiliary_wcs_data(header::AbstractDict, ::BenchmarkTabularFobj; alt::Char = ' ', minerr::Real = 0.0)
+    # Return a prebuilt backend-neutral TAB payload so benchmarks avoid FITS I/O.
+    return FITSWCS.AuxiliaryWCSData(
+        tabular = FITSWCS._tabular_auxiliary_data(
+            header,
+            (extname, extver, extlev, column) -> begin
+                column == "FREQS" && return Float64[10.0, 20.0, 40.0]
+                throw(KeyError(column))
+            end;
+            alt = alt,
+        ),
+    )
+end
+
+const _hdr_cube_tab = Dict(
+    "NAXIS"  => 3,
+    "CTYPE1" => "RA---TAN",  "CTYPE2" => "DEC--TAN",  "CTYPE3" => "FREQ-TAB",
+    "CRPIX1" => 512.0,       "CRPIX2" => 512.0,        "CRPIX3" => 1.0,
+    "CRVAL1" => 83.8221,     "CRVAL2" => -5.3911,      "CRVAL3" => 1.0,
+    "CD1_1"  => -2.7778e-4,  "CD1_2" => 5.5556e-5,    "CD1_3" => 0.0,
+    "CD2_1"  => 5.5556e-5,   "CD2_2" => 2.7778e-4,    "CD2_3" => 0.0,
+    "CD3_1"  => 0.0,         "CD3_2" => 0.0,           "CD3_3" => 1.0,
+    "PS3_0"  => "WCS-TABLE",
+    "PS3_1"  => "FREQS",
+    "LONPOLE" => 180.0,
+)
+const WCS_CUBE_TAB = WCS(_hdr_cube_tab; fobj = BenchmarkTabularFobj())
+
+# ── 2D coupled TAB ───────────────────────────────────────────────────────────
+
+"""Synthetic in-memory auxiliary-data source for 2D coupled-TAB benchmarks."""
+struct BenchmarkTabular2DFobj end
+
+function FITSWCS._auxiliary_wcs_data(header::AbstractDict, ::BenchmarkTabular2DFobj; alt::Char = ' ', minerr::Real = 0.0)
+    coords = Array{Float64}(undef, 2, 2, 2)
+    for k1 in 1:2, k2 in 1:2
+        coords[1, k1, k2] = 100.0 + 10.0 * k1 + k2
+        coords[2, k1, k2] = 200.0 + k1 + 10.0 * k2
+    end
+    return FITSWCS.AuxiliaryWCSData(
+        tabular = FITSWCS._tabular_auxiliary_data(
+            header,
+            (extname, extver, extlev, column) -> begin
+                column == "COORDS" && return coords
+                column == "XINDEX" && return Float64[1.0, 2.0]
+                column == "YINDEX" && return Float64[1.0, 2.0]
+                throw(KeyError(column))
+            end;
+            alt = alt,
+        ),
+    )
+end
+
+const _hdr_coupled_tab = Dict(
+    "NAXIS"  => 2,
+    "CTYPE1" => "RA---TAB",  "CTYPE2" => "DEC--TAB",
+    "CRPIX1" => 1.0,         "CRPIX2" => 1.0,
+    "CRVAL1" => 1.0,         "CRVAL2" => 1.0,
+    "CD1_1"  => 0.5,         "CD1_2" => 0.1,
+    "CD2_1"  => -0.1,        "CD2_2" => 0.5,
+    "PS1_0"  => "WCS-TABLE", "PS2_0" => "WCS-TABLE",
+    "PS1_1"  => "COORDS",    "PS2_1" => "COORDS",
+    "PS1_2"  => "XINDEX",    "PS2_2" => "YINDEX",
+    "PV1_3"  => 1,           "PV2_3" => 2,
+    "LONPOLE" => 180.0,
+)
+const WCS_COUPLED_TAB = WCS(_hdr_coupled_tab; fobj = BenchmarkTabular2DFobj())
+
 # Sample pixels
 const _pix_tan   = [400.0, 300.0]
 const _pix_ait   = [300.0, 150.0]
 const _pix_sip   = [400.0, 300.0]
 const _pix_sip_paperiv = [400.0, 300.0]
 const _pix_cube  = [40.0, 60.0, 5.0]
+const _pix_cube_tab = [512.0, 512.0, 1.5]
+const _pix_coupled_tab = [1.5, 1.5]
 
 const _world_tan  = pixel_to_world(WCS_TAN, _pix_tan)
 const _world_ait  = pixel_to_world(WCS_AIT, _pix_ait)
 const _world_sip  = pixel_to_world(WCS_SIP, _pix_sip)
 const _world_sip_paperiv = pixel_to_world(WCS_SIP_PAPERIV, _pix_sip_paperiv)
 const _world_cube = pixel_to_world(WCS_CUBE, _pix_cube)
+const _world_cube_tab = pixel_to_world(WCS_CUBE_TAB, _pix_cube_tab)
+const _world_coupled_tab = pixel_to_world(WCS_COUPLED_TAB, _pix_coupled_tab)
 
 # Batch of 100 pixels for TAN
 const _batch_pix = [p .+ [i*0.5, i*0.3] for i in 1:100 for p in [_pix_tan]] |>
@@ -181,6 +258,10 @@ const _batch_world = pixel_to_world(WCS_TAN, _batch_pix)
 const _batch_pix_1M = [p .+ [i*0.5, i*0.3] for i in 1:1_000_000 for p in [_pix_tan]] |>
                       (x -> reduce(hcat, x))  # 2×1_000_000 matrix
 const _batch_world_1M = pixel_to_world(WCS_TAN, _batch_pix_1M)
+
+# Batch of 100 pixels for 3D-TAB cube
+const _batch_pix_cube_tab = reduce(hcat, [[512.0 + i*0.5, 512.0 + i*0.3, 1.0 + i*0.02] for i in 1:100])
+const _batch_world_cube_tab = pixel_to_world(WCS_CUBE_TAB, _batch_pix_cube_tab)
 
 # ── pixel_to_world ───────────────────────────────────────────────────────────
 
@@ -194,8 +275,11 @@ let g = SUITE["pixel_to_world"]
     g["TAN-SIP/scalar"] = @benchmarkable pixel_to_world($WCS_SIP, $_pix_sip) evals=100
     g["TAN-SIP-PaperIV/scalar"] = @benchmarkable pixel_to_world($WCS_SIP_PAPERIV, $_pix_sip_paperiv) evals=100
     g["3D-cube/scalar"] = @benchmarkable pixel_to_world($WCS_CUBE, $_pix_cube) evals=100
+    g["3D-cube-TAB/scalar"] = @benchmarkable pixel_to_world($WCS_CUBE_TAB, $_pix_cube_tab) evals=100
+    g["2D-coupled-TAB/scalar"] = @benchmarkable pixel_to_world($WCS_COUPLED_TAB, $_pix_coupled_tab) evals=100
     g["TAN/batch-100"] = @benchmarkable pixel_to_world($WCS_TAN, $_batch_pix) evals=1
     g["TAN/batch-1M"] = @benchmarkable pixel_to_world($WCS_TAN, $_batch_pix_1M) evals=1
+    g["3D-cube-TAB/batch-100"] = @benchmarkable pixel_to_world($WCS_CUBE_TAB, $_batch_pix_cube_tab) evals=1
 end
 
 # ── world_to_pixel ───────────────────────────────────────────────────────────
@@ -207,8 +291,11 @@ let g = SUITE["world_to_pixel"]
     g["TAN-SIP/scalar"] = @benchmarkable world_to_pixel($WCS_SIP, $_world_sip) evals=100
     g["TAN-SIP-PaperIV/scalar"] = @benchmarkable world_to_pixel($WCS_SIP_PAPERIV, $_world_sip_paperiv) evals=100
     g["3D-cube/scalar"] = @benchmarkable world_to_pixel($WCS_CUBE, $_world_cube) evals=100
+    g["3D-cube-TAB/scalar"] = @benchmarkable world_to_pixel($WCS_CUBE_TAB, $_world_cube_tab) evals=100
+    g["2D-coupled-TAB/scalar"] = @benchmarkable world_to_pixel($WCS_COUPLED_TAB, $_world_coupled_tab) evals=100
     g["TAN/batch-100"] = @benchmarkable world_to_pixel($WCS_TAN, $_batch_world) evals=1
     g["TAN/batch-1M"] = @benchmarkable world_to_pixel($WCS_TAN, $_batch_world_1M) evals=1
+    g["3D-cube-TAB/batch-100"] = @benchmarkable world_to_pixel($WCS_CUBE_TAB, $_batch_world_cube_tab) evals=1
 end
 
 # ── parsing ──────────────────────────────────────────────────────────────────
@@ -219,6 +306,7 @@ let g = SUITE["parsing"]
     g["WCS/AIT"] = @benchmarkable WCS($_hdr_ait)
     g["WCS/TAN-SIP"] = @benchmarkable WCS($_hdr_sip)
     g["WCS/3D-cube"] = @benchmarkable WCS($_hdr_cube)
+    g["WCS/3D-cube-TAB"] = @benchmarkable WCS($_hdr_cube_tab; fobj = $(BenchmarkTabularFobj()))
 end
 
 

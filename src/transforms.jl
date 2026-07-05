@@ -49,6 +49,57 @@ end
     return SVector{N, T}(ntuple(i -> T(world[i]) - T(wcs.crval[i]), N))
 end
 
+@inline _tabular_data(::NoAuxiliaryWCSData) = NoTabularWCSData()
+@inline _tabular_data(aux::AuxiliaryWCSData) = aux.tabular
+
+function intermediate_to_tabular_world(::NoTabularWCSData, wcs::WCSTransform, intermediate::AbstractVector, ::Type{T}) where {T <: AbstractFloat}
+    # Ordinary WCS axes use the linear CRVAL offset.
+    return _world_from_intermediate(wcs, intermediate, T)
+end
+
+function intermediate_to_tabular_world(tabular::TabularWCSData, wcs::WCSTransform{N}, intermediate::AbstractVector, ::Type{T}) where {N, T <: AbstractFloat}
+    world = MVector{N, T}(undef)
+
+    # Start with ordinary linear axes, then replace TAB-controlled axes.
+    @inbounds for i in 1:N
+        world[i] = T(wcs.crval[i]) + T(intermediate[i])
+    end
+    @inbounds for i in eachindex(tabular.tables)
+        table = tabular.tables[i]
+        values = _tabular_forward(table, intermediate, wcs.crval)
+        for j in eachindex(table.axes)
+            axis = table.axes[j]
+            world[axis] = T(values[j])
+        end
+    end
+
+    return SVector{N, T}(world)
+end
+
+function tabular_world_to_intermediate(::NoTabularWCSData, wcs::WCSTransform, world::AbstractVector, ::Type{T}) where {T <: AbstractFloat}
+    # Ordinary WCS axes subtract CRVAL to recover intermediate coordinates.
+    return _world_offsets(wcs, world, T)
+end
+
+function tabular_world_to_intermediate(tabular::TabularWCSData, wcs::WCSTransform{N}, world::AbstractVector, ::Type{T}) where {N, T <: AbstractFloat}
+    intermediate = MVector{N, T}(undef)
+
+    # Start with ordinary linear axes, then replace TAB-controlled axes.
+    @inbounds for i in 1:N
+        intermediate[i] = T(world[i]) - T(wcs.crval[i])
+    end
+    @inbounds for i in eachindex(tabular.tables)
+        table = tabular.tables[i]
+        values = _tabular_inverse(table, world, wcs.crval)
+        for j in eachindex(table.axes)
+            axis = table.axes[j]
+            intermediate[axis] = T(values[j])
+        end
+    end
+
+    return SVector{N, T}(intermediate)
+end
+
 function _set_celestial_axes!(coords::AbstractVector, lon_idx::Int, lat_idx::Int, lon, lat)
     # Mutable coordinate storage can be updated in place.
     coords[lon_idx] = lon
@@ -104,11 +155,11 @@ function pixel_to_world(wcs::WCSTransform, pixel::AbstractVector)
         alpha, delta = native_to_celestial(phi, theta, alpha_p, delta_p, phi_p)
         # Build world vector: start from the intermediate coords, then overwrite
         # the celestial axes with the spherical-rotation results.
-        world = _world_from_intermediate(wcs, x, T)
+        world = intermediate_to_tabular_world(_tabular_data(wcs.aux), wcs, x, T)
         return _set_celestial_axes!(world, lon_idx, lat_idx, mod(rad2deg(alpha), 360), rad2deg(delta))
     else
         # Purely linear: world = CRVAL + CD*(pixel - CRPIX)
-        return _world_from_intermediate(wcs, x, T)
+        return intermediate_to_tabular_world(_tabular_data(wcs.aux), wcs, x, T)
     end
 end
 
@@ -140,7 +191,7 @@ function world_to_pixel(wcs::WCSTransform, world::AbstractVector)
         # coordinates; handling it directly avoids pole cancellation.
         lon_delta = mod(world[lon_idx] - T(wcs.crval[lon_idx]) + 180, 360) - 180
         if abs(lon_delta) <= T(1e-10) && abs(world[lat_idx] - T(wcs.crval[lat_idx])) <= T(1e-10)
-            x = _world_offsets(wcs, world, T)
+            x = tabular_world_to_intermediate(_tabular_data(wcs.aux), wcs, world, T)
             x = _set_celestial_axes!(x, lon_idx, lat_idx, zero(T), zero(T))
             return intermediate_to_pixel(wcs, x)
         end
@@ -160,12 +211,12 @@ function world_to_pixel(wcs::WCSTransform, world::AbstractVector)
 
         # Build intermediate coordinate vector
         # Non-celestial axes: x_i = world_i - crval_i (trivial linear axes)
-        x = _world_offsets(wcs, world, T)
+        x = tabular_world_to_intermediate(_tabular_data(wcs.aux), wcs, world, T)
         x = _set_celestial_axes!(x, lon_idx, lat_idx, T(x_lon), T(x_lat))
 
         return intermediate_to_pixel(wcs, x)
     else
-        x = _world_offsets(wcs, world, T)
+        x = tabular_world_to_intermediate(_tabular_data(wcs.aux), wcs, world, T)
         return intermediate_to_pixel(wcs, x)
     end
 end
@@ -250,6 +301,34 @@ function _world_offsets_batch(wcs::WCSTransform{A}, worlds::AbstractMatrix, ::Ty
     return offsets
 end
 
+function _intermediate_to_world_batch(wcs::WCSTransform{A}, intermediate::AbstractMatrix, ::Type{T}) where {A, T <: AbstractFloat}
+    tabular = _tabular_data(wcs.aux)
+    if !has_tabular(tabular)
+        return _add_crval_rows!(wcs, intermediate, T)
+    end
+
+    # TAB interpolation is per coordinate, so evaluate it column-wise.
+    world = similar(intermediate, T, A, size(intermediate, 2))
+    for k in axes(intermediate, 2)
+        world[:, k] = intermediate_to_tabular_world(tabular, wcs, view(intermediate, :, k), T)
+    end
+    return world
+end
+
+function _world_to_intermediate_batch(wcs::WCSTransform{A}, worlds::AbstractMatrix, ::Type{T}) where {A, T <: AbstractFloat}
+    tabular = _tabular_data(wcs.aux)
+    if !has_tabular(tabular)
+        return _world_offsets_batch(wcs, worlds, T)
+    end
+
+    # TAB inverse is per coordinate, so evaluate it column-wise.
+    intermediate = similar(worlds, T, A, size(worlds, 2))
+    for k in axes(worlds, 2)
+        intermediate[:, k] = tabular_world_to_intermediate(tabular, wcs, view(worlds, :, k), T)
+    end
+    return intermediate
+end
+
 """
     pixel_to_world(wcs, pixels::AbstractMatrix) -> AbstractMatrix
 
@@ -269,7 +348,7 @@ function pixel_to_world(wcs::WCSTransform, pixels::AbstractMatrix)
 
     if isnothing(wcs.projection)
         # Purely linear WCS only needs CRVAL added to each output axis.
-        return _add_crval_rows!(wcs, intermediate, T)
+        return _intermediate_to_world_batch(wcs, intermediate, T)
     end
 
     lon_idx = wcs.lon_axis
@@ -281,7 +360,7 @@ function pixel_to_world(wcs::WCSTransform, pixels::AbstractMatrix)
     phi_p = T(wcs.lonpole) * d2r
 
     # Preserve non-celestial axes, then overwrite celestial axes after projection.
-    world = _add_crval_rows!(wcs, copy(intermediate), T)
+    world = _intermediate_to_world_batch(wcs, copy(intermediate), T)
     for k in 1:N
         phi, theta = intermediate_to_native(wcs.projection, intermediate[lon_idx, k], intermediate[lat_idx, k])
         alpha, delta = native_to_celestial(phi, theta, alpha_p, delta_p, phi_p)
@@ -320,16 +399,18 @@ function world_to_pixel(wcs::WCSTransform, worlds::AbstractMatrix)
     if wcs.projection === nothing
         if has_distortion(wcs.pipeline)
             # Distorted linear WCS still needs the per-coordinate inverse pipeline.
-            intermediate = _world_offsets_batch(wcs, worlds, T)
+            intermediate = _world_to_intermediate_batch(wcs, worlds, T)
             return _intermediate_to_pixel_batch(wcs, intermediate, T)
         end
 
         # Purely linear, undistorted WCS can solve all world coordinates directly.
+        has_tabular(_tabular_data(wcs.aux)) &&
+            return _intermediate_to_pixel_batch(wcs, _world_to_intermediate_batch(wcs, worlds, T), T)
         return _linear_world_to_pixel_batch(wcs, worlds, T)
     end
 
     # Start from linear world offsets; celestial axes may be overwritten below.
-    intermediate = _world_offsets_batch(wcs, worlds, T)
+    intermediate = _world_to_intermediate_batch(wcs, worlds, T)
 
     lon_idx = wcs.lon_axis
     lat_idx = wcs.lat_axis

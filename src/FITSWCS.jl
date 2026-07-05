@@ -41,12 +41,13 @@ world_batch = pixel_to_world(wcs, pix_batch)
 module FITSWCS
 
 using LinearAlgebra: I, \
-using StaticArrays: SMatrix, SVector, StaticVector
+using StaticArrays: SMatrix, SVector, StaticVector, MVector, MMatrix
 
 include("units.jl")
 include("utilities.jl")
 include("projections.jl")
 include("lookup_tables.jl")
+include("tabular.jl")
 include("auxiliary_data.jl")
 include("distortion.jl")
 include("celestial.jl")
