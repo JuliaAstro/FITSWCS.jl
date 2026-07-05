@@ -127,15 +127,6 @@ weak dependency; both loader-specific methods are still isolated in extensions.
 - **Paper III spectral algorithms**: plain linear spectral axes work, but
   algorithm-coded axes such as `FREQ-LOG`, `WAVE-F2W`, etc. throw an explicit
   parse error.
-- **`-TAB` table-lookup axes**: forward (pixel → world) and 1D inverse
-  transforms are supported, including coupled multi-dimensional coordinate
-  arrays and index-vector lookups.  Coupled multi-dimensional inverse
-  (world → pixel) uses a Newton–Raphson iteration and may warn if it stalls.
-- **Paper IV distortion lookup tables** (`CPDIS`, `D2IMDIS`, `D2IMERR`,
-  `AXISCORR`, `DP`, `DQ`): throw an explicit parse error.
-- **Iterative inverse distortions**: SIP without inverse `AP` / `BP`
-  coefficients, and non-trivial `TPV` / `TPD`, use iterative inverses that
-  warn and return the best estimate if they fail to converge.
 - **Time and Stokes axes**: transform linearly but carry no physical
   interpretation (e.g., `MJDREF`, `DATE-OBS`, `TIMESYS`, polarization state).
 - **Full WCS.jl API compatibility**: only a partial compatibility layer exists
