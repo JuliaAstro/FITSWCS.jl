@@ -696,7 +696,7 @@ end
 # ──────────────────────────────────────────────────────────────────────────────
 
 """
-    WCS(header; fobj=nothing, alt=' ', minerr=0.0) -> WCSTransform
+    WCS(header; fobj=nothing, alt=' ', minerr=0.0, preserve_units=false) -> WCSTransform
 
 Parse a FITS WCS header into a `WCSTransform`.
 
@@ -705,12 +705,29 @@ values.  FITSIO.jl `FITSHeader` objects can be converted to `Dict` with
 `Dict(header)`, or use the FITSIO extension if available.
 
 `fobj` optionally supplies the owning FITS container for external WCS arrays.
+
 `alt` selects the alternate WCS description character (`' '` for the primary,
-`'A'`–`'Z'` for alternates).
+`'A'`–`'Z'` for alternates).  A single FITS header can carry multiple WCS
+definitions distinguished by a version character appended to the keyword name.
+The primary WCS (no suffix) uses `alt=' '`.  Alternate versions use `alt='A'`,
+`alt='B'`, etc.  For example, a header might contain:
+
+    CTYPE1  = 'RA---TAN'   (primary, alt=' ')
+    CTYPE1A = 'RA---SIN'   (alternate A)
+    CRPIX1A = 512.0
+    CTYPE1B = 'GLON-TAN'   (alternate B, galactic)
+
+Each call to `WCS` returns exactly one `WCSTransform` for the selected
+alternate.  To extract all alternates, call `WCS` once per character.
+
 `minerr` is reserved for Paper IV distortion support: when auxiliary lookup
 tables are implemented, distortion components whose declared error estimate is
 below `minerr` may be skipped.  It is currently passed through to auxiliary-data
 resolver methods but is not used by the core header-only parser.
+
+`preserve_units` controls whether `pixel_to_world` returns world coordinates in
+canonical units (`false`, default) or in the original header CUNIT (`true`).
+See the `pixel_to_world` docstring for the per-axis-type unit contract.
 
 Throws `ArgumentError` for headers that are clearly malformed (e.g., axis
 count mismatch in a CD or PC matrix keyword).
