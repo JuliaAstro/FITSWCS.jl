@@ -51,10 +51,20 @@ end
 
 @inline _tabular_data(::NoAuxiliaryWCSData) = NoTabularWCSData()
 @inline _tabular_data(aux::AuxiliaryWCSData) = aux.tabular
+@inline _spectral_data(::NoAuxiliaryWCSData) = NoSpectralWCSData()
+@inline _spectral_data(aux::AuxiliaryWCSData) = aux.spectral
 
-function intermediate_to_tabular_world(::NoTabularWCSData, wcs::WCSTransform, intermediate::AbstractVector, ::Type{T}) where {T <: AbstractFloat}
-    # Ordinary WCS axes use the linear CRVAL offset.
-    return _world_from_intermediate(wcs, intermediate, T)
+function intermediate_to_tabular_world(::NoTabularWCSData, wcs::WCSTransform{N}, intermediate::AbstractVector, ::Type{T}) where {N, T <: AbstractFloat}
+    spectral_data = _spectral_data(wcs.aux)
+    if spectral_data isa NoSpectralWCSData
+        # Fast path: no TAB, no spectral — just add CRVAL.
+        return _world_from_intermediate(wcs, intermediate, T)
+    end
+    # Spectral axes present: build a mutable world vector, apply conversion.
+    world = _world_from_intermediate(wcs, intermediate, T)  # SVector{N, T}
+    world_mut = MVector{N, T}(world)
+    _apply_spectral_forward!(spectral_data, world_mut, intermediate, T)
+    return SVector{N, T}(world_mut)
 end
 
 function intermediate_to_tabular_world(tabular::TabularWCSData, wcs::WCSTransform{N}, intermediate::AbstractVector, ::Type{T}) where {N, T <: AbstractFloat}
@@ -64,6 +74,9 @@ function intermediate_to_tabular_world(tabular::TabularWCSData, wcs::WCSTransfor
     @inbounds for i in 1:N
         world[i] = T(wcs.crval[i]) + T(intermediate[i])
     end
+    # Apply spectral conversion before TAB so that TAB axes (which are
+    # never also spectral) overwrite the linear baseline correctly.
+    _apply_spectral_forward!(_spectral_data(wcs.aux), world, intermediate, T)
     @inbounds for i in eachindex(tabular.tables)
         table = tabular.tables[i]
         values = _tabular_forward(table, intermediate, wcs.crval)
@@ -76,9 +89,15 @@ function intermediate_to_tabular_world(tabular::TabularWCSData, wcs::WCSTransfor
     return SVector{N, T}(world)
 end
 
-function tabular_world_to_intermediate(::NoTabularWCSData, wcs::WCSTransform, world::AbstractVector, ::Type{T}) where {T <: AbstractFloat}
-    # Ordinary WCS axes subtract CRVAL to recover intermediate coordinates.
-    return _world_offsets(wcs, world, T)
+function tabular_world_to_intermediate(::NoTabularWCSData, wcs::WCSTransform{N}, world::AbstractVector, ::Type{T}) where {N, T <: AbstractFloat}
+    spectral_data = _spectral_data(wcs.aux)
+    if spectral_data isa NoSpectralWCSData
+        return _world_offsets(wcs, world, T)
+    end
+    intermediate_sv = _world_offsets(wcs, world, T)
+    intermediate_mut = MVector{N, T}(intermediate_sv)
+    _apply_spectral_inverse!(spectral_data, intermediate_mut, world, T)
+    return SVector{N, T}(intermediate_mut)
 end
 
 function tabular_world_to_intermediate(tabular::TabularWCSData, wcs::WCSTransform{N}, world::AbstractVector, ::Type{T}) where {N, T <: AbstractFloat}
@@ -88,6 +107,8 @@ function tabular_world_to_intermediate(tabular::TabularWCSData, wcs::WCSTransfor
     @inbounds for i in 1:N
         intermediate[i] = T(world[i]) - T(wcs.crval[i])
     end
+    # Apply spectral inverse before TAB.
+    _apply_spectral_inverse!(_spectral_data(wcs.aux), intermediate, world, T)
     @inbounds for i in eachindex(tabular.tables)
         table = tabular.tables[i]
         values = _tabular_inverse(table, world, wcs.crval)
@@ -98,6 +119,34 @@ function tabular_world_to_intermediate(tabular::TabularWCSData, wcs::WCSTransfor
     end
 
     return SVector{N, T}(intermediate)
+end
+
+# ── Spectral pipeline helpers ─────────────────────────────────────────────────
+
+function _apply_spectral_forward!(::NoSpectralWCSData, world, intermediate, ::Type{T}) where {T}
+    return world  # no spectral axes — zero overhead
+end
+
+function _apply_spectral_forward!(spec::SpectralWCSData, world, intermediate, ::Type{T}) where {T}
+    for s in spec.specs
+        # LINEAR axes already carry the correct CRVAL+intermediate value from
+        # the baseline step; only non-linear algorithms need an overwrite.
+        s.algorithm == :LINEAR && continue
+        world[s.axis] = T(_spectral_x_to_world(T(intermediate[s.axis]), s))
+    end
+    return world
+end
+
+function _apply_spectral_inverse!(::NoSpectralWCSData, intermediate, world, ::Type{T}) where {T}
+    return intermediate  # no spectral axes — zero overhead
+end
+
+function _apply_spectral_inverse!(spec::SpectralWCSData, intermediate, world, ::Type{T}) where {T}
+    for s in spec.specs
+        s.algorithm == :LINEAR && continue
+        intermediate[s.axis] = T(_spectral_world_to_x(T(world[s.axis]), s))
+    end
+    return intermediate
 end
 
 function _set_celestial_axes!(coords::AbstractVector, lon_idx::Int, lat_idx::Int, lon, lat)

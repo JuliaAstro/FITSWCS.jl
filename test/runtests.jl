@@ -120,7 +120,7 @@ end
 
     @testset "Linear / spectral CTYPEs" begin
         sys, ct, pc = parse_ctype("WAVE")
-        @test ct == :linear
+        @test ct == :spectral
         @test pc == ""
 
         sys, ct, pc = parse_ctype("")
@@ -128,7 +128,7 @@ end
         @test pc == ""
 
         sys, ct, pc = parse_ctype("FREQ")
-        @test ct == :linear
+        @test ct == :spectral
         @test pc == ""
     end
 
@@ -146,12 +146,12 @@ end
 
         sys, ct, pc = parse_ctype("FREQ-TAB")
         @test sys == "FREQ"
-        @test ct == :linear
+        @test ct == :spectral
         @test pc == "TAB"
 
         sys, ct, pc = parse_ctype("FREQ-LOG")
         @test sys == "FREQ"
-        @test ct == :linear
+        @test ct == :spectral
         @test pc == "LOG"
     end
 end
@@ -481,20 +481,21 @@ end
     end
 
     @testset "Error: non-linear spectral algorithms are explicitly unsupported" begin
-        # Paper III algorithms such as LOG and F2W are not equivalent to linear axes.
-        hdr = Dict(
+        # Paper III algorithms LOG and F2W are now implemented.
+        # GRI/GRA grism codes remain unsupported.
+        hdr_grism = Dict(
             "NAXIS"  => 1,
-            "CTYPE1" => "FREQ-LOG",
+            "CTYPE1" => "FREQ-GRI",
             "CRPIX1" => 1.0,
             "CRVAL1" => 1.0e9,
             "CDELT1" => 1.0e6,
         )
-        @test_throws ArgumentError WCS(hdr)
+        @test_throws ArgumentError WCS(hdr_grism)
 
         alt_hdr = Dict(
             "NAXIS"   => 1,
             "CTYPE1"  => "FREQ",
-            "CTYPE1A" => "WAVE-F2W",
+            "CTYPE1A" => "FREQ-GRI",
             "CRPIX1A" => 1.0,
             "CRVAL1A" => 500.0,
             "CDELT1A" => 1.0,
@@ -1153,6 +1154,60 @@ end
     inv3 = _tabular_inverse(table, SVector{3, Float32}(fwd3...), crval)
     @test eltype(inv3) == Float32
     @test inv3 ≈ Float32[0.5, 0.5, 0.5]  atol=1e-5
+end
+
+# ──────────────────────────────────────────────────────────────────────────────
+@testset "Spectral coordinates (Paper III)" begin
+    # ── Linear spectral types preserve CUNIT ──────────────────────────────────
+    wcs = WCS(Dict("NAXIS"=>1,"CTYPE1"=>"FREQ","CRPIX1"=>1.0,"CRVAL1"=>1420.4,
+                   "CDELT1"=>1.0,"CUNIT1"=>"MHz"))
+    @test pixel_to_world(wcs, Float32[3.0]) ≈ Float32[1422.4]
+    @test eltype(pixel_to_world(wcs, Float32[3.0])) == Float32
+    @test world_to_pixel(wcs, SVector{1,Float64}(1422.4)) ≈ [3.0]
+
+    # ── WAVE (linear) with non-SI CUNIT ───────────────────────────────────────
+    wcs_nm = WCS(Dict("NAXIS"=>1,"CTYPE1"=>"WAVE","CRPIX1"=>1.0,"CRVAL1"=>500.0,
+                      "CDELT1"=>10.0,"CUNIT1"=>"nm"))
+    @test pixel_to_world(wcs_nm, [2.0]) ≈ [510.0]
+    @test world_to_pixel(wcs_nm, SVector{1,Float64}(510.0)) ≈ [2.0]
+
+    # ── Cross-type: WAVE-F2W with CDELT in S-type display units ──────────────
+    # CDELT is in m/pixel (S-type = wavelength).  Regression against astropy.
+    wcs_f2w = WCS(Dict("NAXIS"=>1,"CTYPE1"=>"WAVE-F2W","CRPIX1"=>1.0,
+                       "CRVAL1"=>0.211,"CDELT1"=>0.001,"CUNIT1"=>"m"))
+    @test pixel_to_world(wcs_f2w, [1.0])[1] ≈ 0.211  atol=1e-12
+    @test pixel_to_world(wcs_f2w, [2.0])[1] ≈ 0.21200476190476  atol=1e-12
+    @test pixel_to_world(wcs_f2w, [3.0])[1] ≈ 0.21301913875598  atol=1e-12
+    fw = pixel_to_world(wcs_f2w, [3.0])
+    @test world_to_pixel(wcs_f2w, SVector{1,Float64}(fw[1])) ≈ [3.0]  atol=1e-10
+    @test eltype(pixel_to_world(wcs_f2w, Float32[3.0])) == Float32
+
+    # ── 3D cube: RA---TAN DEC--TAN + FREQ-LOG kHz ─────────────────────────────
+    # CDELT=1.0 kHz → SI: 1000 Hz.  LOG: S = S_r·exp(w/S_r) with w=1000 Hz.
+    wcs_cube = WCS(Dict(
+        "NAXIS"=>3, "CTYPE1"=>"RA---TAN","CTYPE2"=>"DEC--TAN","CTYPE3"=>"FREQ-LOG",
+        "CRPIX1"=>512.0,"CRPIX2"=>512.0,"CRPIX3"=>1.0,
+        "CRVAL1"=>83.8221,"CRVAL2"=>-5.3911,"CRVAL3"=>1.42e9,
+        "CD1_1"=>-2.7778e-4,"CD1_2"=>5.5556e-5,"CD1_3"=>0.0,
+        "CD2_1"=>5.5556e-5,"CD2_2"=>2.7778e-4,"CD2_3"=>0.0,
+        "CD3_1"=>0.0,"CD3_2"=>0.0,"CD3_3"=>1.0,
+        "CUNIT3"=>"kHz","LONPOLE"=>180.0,
+    ))
+    crval_si = 1.42e9 * 1000  # 1.42e9 kHz → 1.42e12 Hz
+    @test pixel_to_world(wcs_cube, [512.0,512.0,1.0]) ≈ [83.8221,-5.3911,crval_si]
+    w = 1000.0  # CDELT_SI * 1 pixel
+    fw2 = pixel_to_world(wcs_cube, [512.0,512.0,2.0])
+    @test fw2[3] ≈ crval_si * exp(w / crval_si)  rtol=1e-12
+    bw2 = world_to_pixel(wcs_cube, SVector{3,Float64}(fw2...))
+    @test bw2 ≈ [512.0,512.0,2.0]  atol=1e-7
+
+    # ── Edge: zero-frequency world_to_pixel should give non-finite result ─────
+    @test !isfinite(world_to_pixel(wcs_cube,
+                   SVector{3,Float64}(83.8221,-5.3911,0.0))[3])
+
+    # ── Unsupported algorithm code ────────────────────────────────────────────
+    @test_throws ArgumentError WCS(Dict("NAXIS"=>1,"CTYPE1"=>"FREQ-GRI",
+        "CRPIX1"=>1.0,"CRVAL1"=>1.0,"CDELT1"=>1.0))
 end
 
 # ──────────────────────────────────────────────────────────────────────────────
