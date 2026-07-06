@@ -16,14 +16,16 @@ struct NoAuxiliaryWCSData <: AbstractAuxiliaryWCSData end
 
 Backend-independent external WCS data resolved at construction time.
 """
-struct AuxiliaryWCSData{D, C, T} <: AbstractAuxiliaryWCSData
+struct AuxiliaryWCSData{D, C, T, S} <: AbstractAuxiliaryWCSData
     det2im::D
     cpdis::C
     tabular::T
+    spectral::S
 end
 
-AuxiliaryWCSData(; det2im = (nothing, nothing), cpdis = (nothing, nothing), tabular = NoTabularWCSData()) =
-    AuxiliaryWCSData(det2im, cpdis, tabular)
+AuxiliaryWCSData(; det2im = (nothing, nothing), cpdis = (nothing, nothing),
+                  tabular = NoTabularWCSData(), spectral = NoSpectralWCSData()) =
+    AuxiliaryWCSData(det2im, cpdis, tabular, spectral)
 
 struct PaperIVLookupSpec
     extname::String

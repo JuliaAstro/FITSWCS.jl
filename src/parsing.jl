@@ -54,7 +54,7 @@ array indices the values are numerically identical; no offset is required.
 - `lon_axis`   – 1-based index of the longitude axis; 0 if no celestial axes.
 - `lat_axis`   – 1-based index of the latitude axis; 0 if no celestial axes.
 """
-struct WCSTransform{N, L, P <: Union{Nothing, AbstractProjection}, D <: AbstractDistortionPipeline, A <: AbstractAuxiliaryWCSData}
+struct WCSTransform{N, L, P <: Union{Nothing, AbstractProjection}, D <: AbstractDistortionPipeline, A <: AbstractAuxiliaryWCSData, O <: Union{Nothing, ObservationSpec}}
     naxis::Int
     crpix::SVector{N, Float64}
     crval::SVector{N, Float64}
@@ -70,6 +70,7 @@ struct WCSTransform{N, L, P <: Union{Nothing, AbstractProjection}, D <: Abstract
     aux::A
     lon_axis::Int             # 1-based index; 0 = no celestial lon axis
     lat_axis::Int             # 1-based index; 0 = no celestial lat axis
+    obs::O                    # spectral reference-frame metadata
 end
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -119,6 +120,8 @@ function parse_ctype(ctype_str::AbstractString)
         :lon
     elseif coord_part in _LAT_SYSTEMS
         :lat
+    elseif haskey(_STYPE_STR, coord_part)
+        :spectral
     else
         :linear
     end
@@ -415,6 +418,118 @@ function reject_unsupported_nonlinear_axes(ctype::Vector{String})
     end
 
     return nothing
+end
+
+# ── Spectral spec construction ───────────────────────────────────────────────
+
+function _build_spectral_specs(ctype::Vector{String}, crval::Vector{Float64},
+                                cunit::Vector{String}, header::AbstractDict,
+                                alt_str::AbstractString, naxis::Int)
+    specs = SpectralSpec[]
+    for i in 1:naxis
+        coord_part, coord_type, algo_code = parse_ctype(ctype[i])
+        coord_type == :spectral || continue
+        # Skip TAB axes — handled by the tabular path.
+        algo_code == "TAB" && continue
+
+        s_type = _STYPE_STR[coord_part]
+        p_type = _S_TO_P[s_type]
+
+        # Resolve algorithm: blank → linear with X ≡ P.
+        if isempty(algo_code) || algo_code == "---"
+            x_type = p_type
+            algorithm = :LINEAR
+        elseif algo_code == "LOG"
+            x_type = p_type
+            algorithm = :LOG
+        elseif !haskey(_ALGORITHM_MAP, algo_code)
+            throw(ArgumentError(
+                "CTYPE$(i)=$(repr(ctype[i])) uses unsupported algorithm code " *
+                "$(repr(algo_code))"))
+        else
+            x_type, expected_p, algorithm = _ALGORITHM_MAP[algo_code]
+            # For cross-type algorithms the P-type from the S-type must match
+            # the expected P-type from the algorithm code.
+            p_type == expected_p ||
+                throw(ArgumentError(
+                    "CTYPE$(i)=$(repr(ctype[i])): algorithm code $algo_code " *
+                    "expects P-type $(expected_p) but S-type $coord_part " *
+                    "has parent P-type $(p_type)"))
+        end
+
+        # Convert CRVAL from display units to SI.
+        crval_si = crval[i] * _unit_to_si(cunit[i])
+
+        # Rest frequency / wavelength (always in SI: Hz and m).
+        restfrq = Float64(get(header, "RESTFRQ$(alt_str)",
+                               get(header, "RESTFREQ$(alt_str)", NaN)))
+        restwav = Float64(get(header, "RESTWAV$(alt_str)", NaN))
+
+        # Reference-frame keywords.
+        specsys = String(get(header, "SPECSYS$(alt_str)", ""))
+        ssysobs = String(get(header, "SSYSOBS$(alt_str)", ""))
+        velosys = Float64(get(header, "VELOSYS$(alt_str)", NaN))
+        zsource = Float64(get(header, "ZSOURCE$(alt_str)", NaN))
+        ssyssrc = String(get(header, "SSYSSRC$(alt_str)", ""))
+
+        # Only record a spec if there is a non-linear algorithm or frame metadata.
+        # LINEAR axes with no frame metadata are handled by the existing
+        # CRVAL-offset code path and don't need spectral-layer processing.
+        if algorithm != :LINEAR || !isempty(specsys) || !isempty(ssysobs) ||
+           !isnan(velosys) || !isnan(zsource)
+            spec = SpectralSpec(i, s_type, x_type, p_type, algorithm,
+                                restfrq, restwav, crval_si, 0.0, 0.0,
+                                specsys, ssysobs, velosys, zsource, ssyssrc)
+            # Compute dX/dS and X-type reference value (X_r) at parse time.
+            cdelt_scale = _dxds(spec)
+            x_r = if algorithm == :LOG || algorithm == :LINEAR
+                crval_si
+            else
+                p_si = _s_to_p(crval_si, Val(s_type), spec)
+                _p_to_x(p_si, Val(p_type), Val(x_type), Val(algorithm), spec)
+            end
+            spec = SpectralSpec(i, s_type, x_type, p_type, algorithm,
+                                restfrq, restwav, crval_si, x_r, cdelt_scale,
+                                specsys, ssysobs, velosys, zsource, ssyssrc)
+            push!(specs, spec)
+        end
+    end
+    return isempty(specs) ? NoSpectralWCSData() : SpectralWCSData(specs)
+end
+
+function _merge_spectral_aux(aux::NoAuxiliaryWCSData, spectral::NoSpectralWCSData)
+    return aux
+end
+function _merge_spectral_aux(aux::NoAuxiliaryWCSData, spectral::SpectralWCSData)
+    return AuxiliaryWCSData(spectral = spectral)
+end
+function _merge_spectral_aux(aux::AuxiliaryWCSData, spectral::AbstractSpectralWCSData)
+    return AuxiliaryWCSData(det2im = aux.det2im, cpdis = aux.cpdis,
+                            tabular = aux.tabular, spectral = spectral)
+end
+
+function _build_observation_spec(header::AbstractDict, alt_str::AbstractString)
+    mjd = get(header, "MJD-AVG", nothing)
+    date_avg = get(header, "DATE-AVG", nothing)
+    date_obs = get(header, "DATE-OBS", nothing)
+    obs_x = get(header, "OBSGEO-X", nothing)
+    obs_y = get(header, "OBSGEO-Y", nothing)
+    obs_z = get(header, "OBSGEO-Z", nothing)
+    velangl = get(header, "VELANGL", nothing)
+
+    # Only build the spec if at least one observation keyword is present.
+    if all(isnothing, (mjd, date_avg, date_obs, obs_x, obs_y, obs_z, velangl))
+        return nothing
+    end
+    return ObservationSpec(
+        isnothing(mjd) ? NaN : Float64(mjd),
+        isnothing(date_avg) ? "" : String(date_avg),
+        isnothing(date_obs) ? "" : String(date_obs),
+        isnothing(obs_x) ? NaN : Float64(obs_x),
+        isnothing(obs_y) ? NaN : Float64(obs_y),
+        isnothing(obs_z) ? NaN : Float64(obs_z),
+        isnothing(velangl) ? NaN : Float64(velangl),
+    )
 end
 
 function _wcs_axis_indices(key::AbstractString, alt_str::AbstractString)
@@ -717,8 +832,25 @@ function WCS(header::AbstractDict; fobj = nothing, alt::Char = ' ', minerr::Real
     sip = parse_sip_distortion(header, crpix, naxis, alt)
     pipeline = distortion_pipeline(sip, aux)
 
+    # ── Build spectral-axis specifications (must run before CD matrix so that
+    # CDELT scaling for spectral axes is reflected in the matrix). ─────────────
+    spectral = _build_spectral_specs(ctype, crval, cunit, header, alt_str, naxis)
+    aux = _merge_spectral_aux(aux, spectral)
+
     # ── Build the CD matrix ───────────────────────────────────────────────────
     cd = build_cd_matrix(header, naxis, cdelt, alt)
+
+    # Scale CD matrix columns for spectral axes that had CDELT modified.
+    # CDELT scaling converts from S-type display to X-type SI; the same factor
+    # applies to any CDi_j entries coupling the spectral axis to other axes.
+    if spectral isa SpectralWCSData
+        for s in spectral.specs
+            sc = s.cdelt_scale * _unit_to_si(cunit[s.axis])
+            for row in 1:naxis
+                cd[row, s.axis] *= sc
+            end
+        end
+    end
 
     # ── Normalize celestial angular units to degrees at the public API boundary
     # Linear and spectral axes remain in the units encoded by their headers.
@@ -770,6 +902,9 @@ function WCS(header::AbstractDict; fobj = nothing, alt::Char = ' ', minerr::Real
         delta_p = dp * (180.0 / π)
     end
 
+    # ── Build observation-level metadata for frame corrections ────────────────
+    obs = _build_observation_spec(header, alt_str)
+
     return WCSTransform(
         naxis,
         SVector{naxis, Float64}(crpix),
@@ -777,6 +912,6 @@ function WCS(header::AbstractDict; fobj = nothing, alt::Char = ' ', minerr::Real
         SMatrix{naxis, naxis, Float64, naxis * naxis}(cd),
         ctype, cunit,
         lonpole, latpole, alpha_p, delta_p,
-        projection, pipeline, aux, lon_axis, lat_axis,
+        projection, pipeline, aux, lon_axis, lat_axis, obs,
     )
 end
