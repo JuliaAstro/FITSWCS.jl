@@ -132,45 +132,49 @@ Derivative of X-type (SI) wrt P-type (SI) evaluated at reference point.
 From Paper III Table 3 (basic spectral transformations) plus the IUGG/Ciddor
 air-wavelength derivative for air-wavelength types.
 """
-function _dxdp(::X, ::P, ::A, p_si, spec) where {X, P, A}
-    if X === P
-        return 1.0
-    elseif A === Val{:F2W}  # dν/dλ = -c/λ²
-        return -_C_LIGHT / (p_si * p_si)
-    elseif A === Val{:W2F}  # dλ/dν = -c/ν²
-        return -_C_LIGHT / (p_si * p_si)
-    elseif A === Val{:F2V}  # dν/dv = -c·ν₀ / ((c+v)·√(c²-v²))
-        v = p_si
-        return -_C_LIGHT * spec.restfrq / ((_C_LIGHT + v) * sqrt(_C_LIGHT*_C_LIGHT - v*v))
-    elseif A === Val{:V2F}  # dv/dν = -4c·ν·ν₀²/(ν²+ν₀²)²
-        ν = p_si
-        ν₀ = spec.restfrq
-        return -4*_C_LIGHT*ν*ν₀*ν₀ / ((ν*ν + ν₀*ν₀)^2)
-    elseif A === Val{:W2V}  # dλ/dv = c·λ₀ / ((c-v)·√(c²-v²))
-        v = p_si
-        return _C_LIGHT * spec.restwav / ((_C_LIGHT - v) * sqrt(_C_LIGHT*_C_LIGHT - v*v))
-    elseif A === Val{:V2W}  # dv/dλ = 4c·λ·λ₀²/(λ²+λ₀²)²
-        λ = p_si
-        λ₀ = spec.restwav
-        return 4*_C_LIGHT*λ*λ₀*λ₀ / ((λ*λ + λ₀*λ₀)^2)
-    elseif A === Val{:F2A}  # dν/dλ_a = (dν/dλ)·(dλ/dλ_a)
-        return _dxdp(Val{:F}, Val{:W}, Val{:F2W}, p_si, spec) * _dwave_dawav(p_si)
-    elseif A === Val{:A2F}  # dλ_a/dν = (dλ_a/dλ)·(dλ/dν)
-        ν = p_si
-        λ = _C_LIGHT / ν
-        return _dawav_dwave(λ) * (-_C_LIGHT / (ν*ν))
-    elseif A === Val{:W2A}  # dλ/dλ_a
-        return _dwave_dawav(p_si)
-    elseif A === Val{:A2W}  # dλ_a/dλ
-        return _dawav_dwave(p_si)
-    elseif A === Val{:V2A}  # dv/dλ_a = (dv/dλ)·(dλ/dλ_a)
-        return _dxdp(Val{:V}, Val{:W}, Val{:V2W}, p_si, spec) * _dwave_dawav(p_si)
-    elseif A === Val{:A2V}  # dλ_a/dv = (dλ_a/dλ)·(dλ/dv)
-        v = p_si
-        λ = _C_LIGHT / _velo_to_freq(v, spec.restfrq)
-        return _dawav_dwave(λ) * _dxdp(Val{:W}, Val{:V}, Val{:W2V}, v, spec)
-    end
-    return 1.0
+# Identity: X ≡ P (LINEAR, LOG, or matching basic types)
+_dxdp(::X, ::X, ::A, p_si, spec) where {X, A} = 1.0
+
+# F2W: dν/dλ = -c/λ²
+_dxdp(::Val{:F}, ::Val{:W}, ::Val{:F2W}, p_si, spec) = -_C_LIGHT / (p_si * p_si)
+# W2F: dλ/dν = -c/ν²
+_dxdp(::Val{:W}, ::Val{:F}, ::Val{:W2F}, p_si, spec) = -_C_LIGHT / (p_si * p_si)
+
+# F2V: dν/dv = -c·ν₀ / ((c+v)·√(c²-v²))
+function _dxdp(::Val{:F}, ::Val{:V}, ::Val{:F2V}, v, spec)
+    return -_C_LIGHT * spec.restfrq / ((_C_LIGHT + v) * sqrt(_C_LIGHT*_C_LIGHT - v*v))
+end
+# V2F: dv/dν = -4c·ν·ν₀²/(ν²+ν₀²)²
+function _dxdp(::Val{:V}, ::Val{:F}, ::Val{:V2F}, ν, spec)
+    ν₀ = spec.restfrq
+    return -4*_C_LIGHT*ν*ν₀*ν₀ / ((ν*ν + ν₀*ν₀)^2)
+end
+
+# W2V: dλ/dv = c·λ₀ / ((c-v)·√(c²-v²))
+function _dxdp(::Val{:W}, ::Val{:V}, ::Val{:W2V}, v, spec)
+    return _C_LIGHT * spec.restwav / ((_C_LIGHT - v) * sqrt(_C_LIGHT*_C_LIGHT - v*v))
+end
+# V2W: dv/dλ = 4c·λ·λ₀²/(λ²+λ₀²)²
+function _dxdp(::Val{:V}, ::Val{:W}, ::Val{:V2W}, λ, spec)
+    λ₀ = spec.restwav
+    return 4*_C_LIGHT*λ*λ₀*λ₀ / ((λ*λ + λ₀*λ₀)^2)
+end
+
+# Air-wavelength derivatives chain through wave↔awav.
+_dxdp(::Val{:F}, ::Val{:A}, ::Val{:F2A}, p_si, spec) =
+    _dxdp(Val{:F}(), Val{:W}(), Val{:F2W}(), p_si, spec) * _dwave_dawav(p_si)
+_dxdp(::Val{:W}, ::Val{:A}, ::Val{:W2A}, p_si, spec) = _dwave_dawav(p_si)
+_dxdp(::Val{:V}, ::Val{:A}, ::Val{:V2A}, p_si, spec) =
+    _dxdp(Val{:V}(), Val{:W}(), Val{:V2W}(), p_si, spec) * _dwave_dawav(p_si)
+
+function _dxdp(::Val{:A}, ::Val{:F}, ::Val{:A2F}, ν, spec)
+    λ = _C_LIGHT / ν
+    return _dawav_dwave(λ) * (-_C_LIGHT / (ν*ν))
+end
+_dxdp(::Val{:A}, ::Val{:W}, ::Val{:A2W}, p_si, spec) = _dawav_dwave(p_si)
+function _dxdp(::Val{:A}, ::Val{:V}, ::Val{:A2V}, v, spec)
+    λ = _C_LIGHT / _velo_to_freq(v, spec.restfrq)
+    return _dawav_dwave(λ) * _dxdp(Val{:W}(), Val{:V}(), Val{:W2V}(), v, spec)
 end
 
 """Derivative of vacuum wavelength wrt air wavelength (IUGG/Ciddor)."""
