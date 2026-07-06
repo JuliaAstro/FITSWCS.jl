@@ -433,28 +433,23 @@ function _build_spectral_specs(ctype::Vector{String}, crval::Vector{Float64},
         algo_code == "TAB" && continue
 
         s_type = _STYPE_STR[coord_part]
-        p_type = _S_TO_P[s_type]
+        s_p_type = _S_TO_P[s_type]   # parent type from S-type (for LINEAR/LOG)
 
-        # Resolve algorithm: blank → linear with X ≡ P.
+        # Resolve algorithm: blank → linear with X ≡ P ≡ S-type parent.
         if isempty(algo_code) || algo_code == "---"
-            x_type = p_type
+            x_type = s_p_type
+            p_type = s_p_type
             algorithm = :LINEAR
         elseif algo_code == "LOG"
-            x_type = p_type
+            x_type = s_p_type
+            p_type = s_p_type
             algorithm = :LOG
         elseif !haskey(_ALGORITHM_MAP, algo_code)
             throw(ArgumentError(
                 "CTYPE$(i)=$(repr(ctype[i])) uses unsupported algorithm code " *
                 "$(repr(algo_code))"))
         else
-            x_type, expected_p, algorithm = _ALGORITHM_MAP[algo_code]
-            # For cross-type algorithms the P-type from the S-type must match
-            # the expected P-type from the algorithm code.
-            p_type == expected_p ||
-                throw(ArgumentError(
-                    "CTYPE$(i)=$(repr(ctype[i])): algorithm code $algo_code " *
-                    "expects P-type $(expected_p) but S-type $coord_part " *
-                    "has parent P-type $(p_type)"))
+            x_type, p_type, algorithm = _ALGORITHM_MAP[algo_code]
         end
 
         # Convert CRVAL from display units to SI.

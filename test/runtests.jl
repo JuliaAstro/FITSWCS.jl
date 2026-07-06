@@ -1201,6 +1201,21 @@ end
     bw2 = world_to_pixel(wcs_cube, SVector{3,Float64}(fw2...))
     @test bw2 ≈ [512.0,512.0,2.0]  atol=1e-7
 
+    # ── Air-wavelength types ─────────────────────────────────────────────────
+    # AWAV linear with non-SI CUNIT: round-trip in display units.
+    wcs_awav = WCS(Dict("NAXIS"=>1,"CTYPE1"=>"AWAV","CRPIX1"=>1.0,
+                        "CRVAL1"=>5000.0,"CDELT1"=>10.0,"CUNIT1"=>"Angstrom"))
+    @test pixel_to_world(wcs_awav, [1.0])[1] ≈ 5000.0
+    @test pixel_to_world(wcs_awav, [2.0])[1] ≈ 5010.0
+    @test world_to_pixel(wcs_awav, SVector{1,Float64}(5010.0)) ≈ [2.0]
+
+    # WAVE-W2A round-trip (internal consistency; WCSLIB 8.3 doesn't recognize
+    # the code so no astropy regression value is available).
+    wcs_w2a = WCS(Dict("NAXIS"=>1,"CTYPE1"=>"WAVE-W2A","CRPIX1"=>1.0,
+                       "CRVAL1"=>5000.0,"CDELT1"=>10.0,"CUNIT1"=>"Angstrom"))
+    fw_w2a = pixel_to_world(wcs_w2a, [2.0])
+    @test world_to_pixel(wcs_w2a, SVector{1,Float64}(fw_w2a[1])) ≈ [2.0] atol=1e-10
+
     # ── Edge: zero-frequency world_to_pixel should give non-finite result ─────
     @test !isfinite(world_to_pixel(wcs_cube,
                    SVector{3,Float64}(83.8221,-5.3911,0.0))[3])
