@@ -124,9 +124,18 @@ weak dependency; both loader-specific methods are still isolated in extensions.
 
 ## Known Limitations
 
-- **Paper III spectral algorithms**: plain linear spectral axes work, but
-  algorithm-coded axes such as `FREQ-LOG`, `WAVE-F2W`, etc. throw an explicit
-  parse error.
+- **Paper III spectral algorithms**: implemented for all algorithm codes
+  (`LOG`, `F2W`, `W2F`, `F2V`, `V2F`, `W2V`, `V2W`, air-wavelength cross-conversions)
+  and all S-types (`FREQ`, `AFRQ`, `ENER`, `WAVN`, `VRAD`, `WAVE`, `VOPT`,
+  `ZOPT`, `AWAV`, `VELO`, `BETA`).  Rest frequency/wavelength (`RESTFRQ`,
+  `RESTWAV`) and reference-frame keywords (`SPECSYS`, `SSYSOBS`, `VELOSYS`,
+  `ZSOURCE`, `SSYSSRC`, `MJD-AVG`, `OBSGEO-X/Y/Z`) are parsed and stored for
+  downstream frame-correction code, but no frame-correction math is performed
+  in the default transforms — matching WCSLIB and astropy.
+- **Grism** algorithm codes `GRI`/`GRA` are not yet implemented.
+- **Spectral world coordinates for algorithm-coded axes are returned in SI**
+  (e.g. Hz, m, m/s) regardless of `CUNIT`; display-unit conversion at the API
+  boundary is not yet wired in.
 - **Time and Stokes axes**: transform linearly but carry no physical
   interpretation (e.g., `MJDREF`, `DATE-OBS`, `TIMESYS`, polarization state).
 - **Full WCS.jl API compatibility**: only a partial compatibility layer exists
