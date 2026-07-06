@@ -253,9 +253,9 @@ const _pix_ait   = [300.0, 150.0]
 const _pix_sip   = [400.0, 300.0]
 const _pix_sip_paperiv = [400.0, 300.0]
 const _pix_cube  = [40.0, 60.0, 5.0]
-const _pix_cube_tab = [512.0, 512.0, 1.5]
+const _pix_cube_tab = [612.0, 412.0, 1.5]
 const _pix_coupled_tab = [1.5, 1.5]
-const _pix_cube_spec = [512.0, 512.0, 3.0]
+const _pix_cube_spec = [612.0, 412.0, 3.0]
 
 const _world_tan  = pixel_to_world(WCS_TAN, _pix_tan)
 const _world_ait  = pixel_to_world(WCS_AIT, _pix_ait)
@@ -277,7 +277,7 @@ const _batch_pix_1M = [p .+ [i*0.5, i*0.3] for i in 1:1_000_000 for p in [_pix_t
 const _batch_world_1M = pixel_to_world(WCS_TAN, _batch_pix_1M)
 
 # Batch of 100 pixels for 3D-TAB cube
-const _batch_pix_cube_tab = reduce(hcat, [[512.0 + i*0.5, 512.0 + i*0.3, 1.0 + i*0.02] for i in 1:100])
+const _batch_pix_cube_tab = reduce(hcat, [[612.0 + i*0.5, 412.0 + i*0.3, 1.0 + i*0.02] for i in 1:100])
 const _batch_world_cube_tab = pixel_to_world(WCS_CUBE_TAB, _batch_pix_cube_tab)
 
 # ── pixel_to_world ───────────────────────────────────────────────────────────
@@ -297,8 +297,8 @@ let g = SUITE["pixel_to_world"]
     g["2D-coupled-TAB/scalar"] = @benchmarkable pixel_to_world($WCS_COUPLED_TAB, $_pix_coupled_tab) evals=100
     g["TAN/batch-100/Float64"] = @benchmarkable pixel_to_world($WCS_TAN, $_batch_pix) evals=1
     g["TAN/batch-100/Float32"] = @benchmarkable pixel_to_world($WCS_TAN, $(Float32.(_batch_pix))) evals=1
-    g["TAN/batch-1M/Float64"] = @benchmarkable pixel_to_world($WCS_TAN, $_batch_pix_1M) evals=1
-    g["TAN/batch-1M/Float32"] = @benchmarkable pixel_to_world($WCS_TAN, $(Float32.(_batch_pix_1M))) evals=1
+    g["TAN/batch-1M/Float64"] = @benchmarkable pixel_to_world($WCS_TAN, $_batch_pix_1M) evals=2 samples=3
+    g["TAN/batch-1M/Float32"] = @benchmarkable pixel_to_world($WCS_TAN, $(Float32.(_batch_pix_1M))) evals=2 samples=3
     g["3D-cube-TAB/batch-100"] = @benchmarkable pixel_to_world($WCS_CUBE_TAB, $_batch_pix_cube_tab) evals=1
 end
 
@@ -316,8 +316,8 @@ let g = SUITE["world_to_pixel"]
     g["2D-coupled-TAB/scalar"] = @benchmarkable world_to_pixel($WCS_COUPLED_TAB, $_world_coupled_tab) evals=100
     g["TAN/batch-100/Float64"] = @benchmarkable world_to_pixel($WCS_TAN, $_batch_world) evals=1
     g["TAN/batch-100/Float32"] = @benchmarkable world_to_pixel($WCS_TAN, $(Float32.(_batch_world))) evals=1
-    g["TAN/batch-1M/Float64"] = @benchmarkable world_to_pixel($WCS_TAN, $_batch_world_1M) evals=1
-    g["TAN/batch-1M/Float32"] = @benchmarkable world_to_pixel($WCS_TAN, $(Float32.(_batch_world_1M))) evals=1
+    g["TAN/batch-1M/Float64"] = @benchmarkable world_to_pixel($WCS_TAN, $_batch_world_1M) evals=2 samples=3
+    g["TAN/batch-1M/Float32"] = @benchmarkable world_to_pixel($WCS_TAN, $(Float32.(_batch_world_1M))) evals=2 samples=3
     g["3D-cube-TAB/batch-100"] = @benchmarkable world_to_pixel($WCS_CUBE_TAB, $_batch_world_cube_tab) evals=1
 end
 
@@ -325,12 +325,12 @@ end
 
 SUITE["parsing"] = BenchmarkGroup()
 let g = SUITE["parsing"]
-    g["WCS/TAN"] = @benchmarkable WCS($_hdr_tan)
-    g["WCS/AIT"] = @benchmarkable WCS($_hdr_ait)
-    g["WCS/TAN-SIP"] = @benchmarkable WCS($_hdr_sip)
-    g["WCS/3D-cube"] = @benchmarkable WCS($_hdr_cube)
-    g["WCS/3D-cube-TAB"] = @benchmarkable WCS($_hdr_cube_tab; fobj = $(BenchmarkTabularFobj()))
-    g["WCS/3D-cube-spec"] = @benchmarkable WCS($_hdr_cube_spec)
+    g["WCS/TAN"] = @benchmarkable WCS($_hdr_tan) evals=1 samples=10
+    g["WCS/AIT"] = @benchmarkable WCS($_hdr_ait) evals=1 samples=10
+    g["WCS/TAN-SIP"] = @benchmarkable WCS($_hdr_sip) evals=1 samples=10
+    g["WCS/3D-cube"] = @benchmarkable WCS($_hdr_cube) evals=1 samples=10
+    g["WCS/3D-cube-TAB"] = @benchmarkable WCS($_hdr_cube_tab; fobj = $(BenchmarkTabularFobj())) evals=5 samples=3
+    g["WCS/3D-cube-spec"] = @benchmarkable WCS($_hdr_cube_spec) evals=5 samples=3
 end
 
 

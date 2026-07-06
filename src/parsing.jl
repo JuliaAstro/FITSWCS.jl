@@ -477,24 +477,25 @@ function _build_spectral_specs(ctype::Vector{String}, crval::Vector{Float64},
         # CRVAL-offset code path and don't need spectral-layer processing.
         if algorithm != :LINEAR || !isempty(specsys) || !isempty(ssysobs) ||
            !isnan(velosys) || !isnan(zsource)
-            spec = SpectralSpec(i, s_type, x_type, p_type, algorithm,
-                                restfrq, restwav, crval_si, 0.0, 0.0,
-                                specsys, ssysobs, velosys, zsource, ssyssrc)
-            # Compute dX/dS and X-type reference value (X_r) at parse time.
-            cdelt_scale = _dxds(spec)
+            # Build a proto-spec to compute derivatives.
+            VX, VP, VS, VA = typeof(Val(x_type)), typeof(Val(p_type)),
+                             typeof(Val(s_type)), typeof(Val(algorithm))
+            proto = SpectralSpec{VX, VP, VS, VA}(i, restfrq, restwav, crval_si,
+                           0.0, 0.0, specsys, ssysobs, velosys, zsource, ssyssrc)
+            cdelt_scale = _dxds(proto)
             x_r = if algorithm == :LOG || algorithm == :LINEAR
                 crval_si
             else
-                p_si = _s_to_p(crval_si, Val(s_type), spec)
-                _p_to_x(p_si, Val(p_type), Val(x_type), Val(algorithm), spec)
+                p_si = _s_to_p(crval_si, VS(), proto)
+                _p_to_x(p_si, VP(), VX(), VA(), proto)
             end
-            spec = SpectralSpec(i, s_type, x_type, p_type, algorithm,
-                                restfrq, restwav, crval_si, x_r, cdelt_scale,
-                                specsys, ssysobs, velosys, zsource, ssyssrc)
+            spec = SpectralSpec{VX, VP, VS, VA}(i, restfrq, restwav, crval_si,
+                           x_r, cdelt_scale, specsys, ssysobs, velosys, zsource, ssyssrc)
             push!(specs, spec)
         end
     end
-    return isempty(specs) ? NoSpectralWCSData() : SpectralWCSData(specs)
+    return isempty(specs) ? NoSpectralWCSData() :
+           SpectralWCSData(ntuple(i -> specs[i], length(specs)))
 end
 
 function _merge_spectral_aux(aux::NoAuxiliaryWCSData, spectral::NoSpectralWCSData)

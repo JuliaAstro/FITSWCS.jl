@@ -22,18 +22,19 @@ abstract type AbstractSpectralWCSData end
 struct NoSpectralWCSData <: AbstractSpectralWCSData end
 
 """
-    SpectralSpec
+    SpectralSpec{X, P, S, A}
 
-Parsed spectral-axis specification carrying the S/P/X types, algorithm
-code, rest frequency/wavelength, reference value in SI units, and
-reference-frame metadata.
+Parsed spectral-axis specification carrying the S/P/X types and algorithm
+code as `Val` type parameters for compile-time dispatch in the hot path.
+
+Type parameters:
+- `X`: `Val{:F}`, `Val{:W}`, `Val{:A}`, or `Val{:V}` — X-type basic type
+- `P`: same set — P-type parent basic type
+- `S`: `Val{:FREQ}`, `Val{:WAVE}`, `Val{:VELO}`, etc. — S-type coordinate type
+- `A`: `Val{:LINEAR}`, `Val{:LOG}`, `Val{:F2W}`, etc. — algorithm code
 """
-struct SpectralSpec
+struct SpectralSpec{X, P, S, A}
     axis::Int           # WCS axis number (1-based)
-    s_type::Symbol      # :FREQ, :WAVE, :VELO, :AWAV, :VRAD, :VOPT, :ZOPT, etc.
-    x_type::Symbol      # :F, :W, :A, or :V — basic type the axis is linear in
-    p_type::Symbol      # :F, :W, :A, or :V — parent basic type of S
-    algorithm::Symbol   # :LINEAR, :LOG, :F2W, :W2F, :F2V, :V2F, :W2V, :V2W, etc.
     restfrq::Float64    # RESTFRQa — rest frequency in Hz (NaN if absent)
     restwav::Float64    # RESTWAVa — rest wavelength in m (NaN if absent)
     crval_si::Float64   # CRVAL in S-type SI units (world coordinate at ref)
@@ -49,8 +50,8 @@ struct SpectralSpec
 end
 
 """Resolved collection of all spectral-axis specifications for one WCS."""
-struct SpectralWCSData <: AbstractSpectralWCSData
-    specs::Vector{SpectralSpec}
+struct SpectralWCSData{T <: Tuple} <: AbstractSpectralWCSData
+    specs::T
 end
 
 """Observation-level metadata needed for spectral reference frame corrections."""
@@ -104,25 +105,24 @@ From Paper III Table 4 (property equations).  For basic types (FREQ→F, WAVE→
 VELO→V, AWAV→A) this is 1.0; for derived types the linear P↔S relation gives a
 constant derivative.
 """
-function _dpds(s_type::Symbol, s_si, spec)
-    if s_type == :FREQ || s_type == :WAVE || s_type == :VELO || s_type == :AWAV
-        return 1.0
-    elseif s_type == :AFRQ
-        return 2π
-    elseif s_type == :ENER
-        return inv(_H_PLANCK)
-    elseif s_type == :WAVN
-        return 1.0
-    elseif s_type == :VRAD
-        return -spec.restfrq / _C_LIGHT
-    elseif s_type == :VOPT
-        return spec.restwav / _C_LIGHT
-    elseif s_type == :ZOPT
-        return spec.restwav
-    elseif s_type == :BETA
-        return inv(_C_LIGHT)
-    end
-    return 1.0
+_dpds(::Val{:FREQ}, s_si, spec) = 1.0
+_dpds(::Val{:WAVE}, s_si, spec) = 1.0
+_dpds(::Val{:VELO}, s_si, spec) = 1.0
+_dpds(::Val{:AWAV}, s_si, spec) = 1.0
+_dpds(::Val{:AFRQ}, s_si, spec) = 2π
+_dpds(::Val{:ENER}, s_si, spec) = inv(_H_PLANCK)
+_dpds(::Val{:WAVN}, s_si, spec) = 1.0
+function _dpds(::Val{:VRAD}, s_si, spec)
+    return -spec.restfrq / _C_LIGHT
+end
+function _dpds(::Val{:VOPT}, s_si, spec)
+    return spec.restwav / _C_LIGHT
+end
+function _dpds(::Val{:ZOPT}, s_si, spec)
+    return spec.restwav
+end
+function _dpds(::Val{:BETA}, s_si, spec)
+    return inv(_C_LIGHT)
 end
 
 """
@@ -132,46 +132,43 @@ Derivative of X-type (SI) wrt P-type (SI) evaluated at reference point.
 From Paper III Table 3 (basic spectral transformations) plus the IUGG/Ciddor
 air-wavelength derivative for air-wavelength types.
 """
-function _dxdp(x_type::Symbol, p_type::Symbol, algo::Symbol, p_si, spec)
-    if x_type == p_type
+function _dxdp(::X, ::P, ::A, p_si, spec) where {X, P, A}
+    if X === P
         return 1.0
-    elseif algo == :F2W  # dν/dλ = -c/λ²
+    elseif A === Val{:F2W}  # dν/dλ = -c/λ²
         return -_C_LIGHT / (p_si * p_si)
-    elseif algo == :W2F  # dλ/dν = -c/ν²
+    elseif A === Val{:W2F}  # dλ/dν = -c/ν²
         return -_C_LIGHT / (p_si * p_si)
-    elseif algo == :F2V  # dν/dv = -c·ν₀ / ((c+v)·√(c²-v²))
+    elseif A === Val{:F2V}  # dν/dv = -c·ν₀ / ((c+v)·√(c²-v²))
         v = p_si
         return -_C_LIGHT * spec.restfrq / ((_C_LIGHT + v) * sqrt(_C_LIGHT*_C_LIGHT - v*v))
-    elseif algo == :V2F  # dv/dν = -4c·ν·ν₀²/(ν²+ν₀²)²
+    elseif A === Val{:V2F}  # dv/dν = -4c·ν·ν₀²/(ν²+ν₀²)²
         ν = p_si
         ν₀ = spec.restfrq
         return -4*_C_LIGHT*ν*ν₀*ν₀ / ((ν*ν + ν₀*ν₀)^2)
-    elseif algo == :W2V  # dλ/dv = c·λ₀ / ((c-v)·√(c²-v²))
+    elseif A === Val{:W2V}  # dλ/dv = c·λ₀ / ((c-v)·√(c²-v²))
         v = p_si
         return _C_LIGHT * spec.restwav / ((_C_LIGHT - v) * sqrt(_C_LIGHT*_C_LIGHT - v*v))
-    elseif algo == :V2W  # dv/dλ = 4c·λ·λ₀²/(λ²+λ₀²)²
+    elseif A === Val{:V2W}  # dv/dλ = 4c·λ·λ₀²/(λ²+λ₀²)²
         λ = p_si
         λ₀ = spec.restwav
         return 4*_C_LIGHT*λ*λ₀*λ₀ / ((λ*λ + λ₀*λ₀)^2)
-    elseif algo == :F2A  # dν/dλ_a = (dν/dλ)·(dλ/dλ_a)
-        λ_wave = p_si  # p_si is air wavelength here — need vacuum wavelength
-        return _dxdp(:F, :W, :F2W, λ_wave, spec) * _dwave_dawav(λ_wave)
-    elseif algo == :A2F  # dλ_a/dν = (dλ_a/dλ)·(dλ/dν)
+    elseif A === Val{:F2A}  # dν/dλ_a = (dν/dλ)·(dλ/dλ_a)
+        return _dxdp(Val{:F}, Val{:W}, Val{:F2W}, p_si, spec) * _dwave_dawav(p_si)
+    elseif A === Val{:A2F}  # dλ_a/dν = (dλ_a/dλ)·(dλ/dν)
         ν = p_si
         λ = _C_LIGHT / ν
         return _dawav_dwave(λ) * (-_C_LIGHT / (ν*ν))
-    elseif algo == :W2A  # dλ/dλ_a — derivative of vacuum wavelength wrt air
+    elseif A === Val{:W2A}  # dλ/dλ_a
         return _dwave_dawav(p_si)
-    elseif algo == :A2W  # dλ_a/dλ — derivative of air wavelength wrt vacuum
-        λ_vac = p_si  # p_si is vacuum wavelength for A2W
-        return _dawav_dwave(λ_vac)
-    elseif algo == :V2A  # dv/dλ_a = (dv/dλ)·(dλ/dλ_a)
-        λ_vac = p_si  # p_si is air wavelength, need vacuum
-        return _dxdp(:V, :W, :V2W, λ_vac, spec) * _dwave_dawav(λ_vac)
-    elseif algo == :A2V  # dλ_a/dv = (dλ_a/dλ)·(dλ/dv)
+    elseif A === Val{:A2W}  # dλ_a/dλ
+        return _dawav_dwave(p_si)
+    elseif A === Val{:V2A}  # dv/dλ_a = (dv/dλ)·(dλ/dλ_a)
+        return _dxdp(Val{:V}, Val{:W}, Val{:V2W}, p_si, spec) * _dwave_dawav(p_si)
+    elseif A === Val{:A2V}  # dλ_a/dv = (dλ_a/dλ)·(dλ/dv)
         v = p_si
         λ = _C_LIGHT / _velo_to_freq(v, spec.restfrq)
-        return _dawav_dwave(λ) * _dxdp(:W, :V, :W2V, v, spec)
+        return _dawav_dwave(λ) * _dxdp(Val{:W}, Val{:V}, Val{:W2V}, v, spec)
     end
     return 1.0
 end
@@ -196,14 +193,13 @@ end
 Compute dX/dS at the reference point: the factor to multiply CDELT by so the
 CD step produces intermediate in X-type SI units.
 """
-function _dxds(spec::SpectralSpec)
-    if spec.algorithm == :LOG || spec.algorithm == :LINEAR
+function _dxds(spec::SpectralSpec{X, P, S, A}) where {X, P, S, A}
+    if A === Val{:LOG} || A === Val{:LINEAR}
         return 1.0    # X = S for LOG/LINEAR, so dX/dS = 1
     end
     # Cross-type: dX/dS = dX/dP · dP/dS
-    p_si = _s_to_p(spec.crval_si, Val(spec.s_type), spec)
-    return _dxdp(spec.x_type, spec.p_type, spec.algorithm, p_si, spec) *
-           _dpds(spec.s_type, spec.crval_si, spec)
+    p_si = _s_to_p(spec.crval_si, S(), spec)
+    return _dxdp(X(), P(), A(), p_si, spec) * _dpds(S(), spec.crval_si, spec)
 end
 
 # ── Physical constants (SI) ──────────────────────────────────────────────────
@@ -479,6 +475,11 @@ end
 
 # ── Pipeline helpers ─────────────────────────────────────────────────────────
 
+"""Compile-time check: is this spectral spec for a linear (non-converting) axis?"""
+_is_linear(::SpectralSpec{X, P, S, A}) where {X, P, S, A} = (A === Val{:LINEAR})
+
+
+
 """
     _spectral_x_to_world(x, spec::SpectralSpec)
 
@@ -488,12 +489,12 @@ to a world coordinate (S-type SI) for a single spectral axis.
 Adds ``X_r`` to recover the absolute X value before the X→P→S chain.
 For LOG axes ``x = S_r·ln(S/S_r)`` is used directly.
 """
-function _spectral_x_to_world(x, spec::SpectralSpec)
+function _spectral_x_to_world(x, spec::SpectralSpec{X, P, S, A}) where {X, P, S, A}
     # For cross-type: x is the offset X - X_r, so add X_r to get absolute X.
     # For LOG: x = S_r·ln(S/S_r), the LOG formula uses x directly.
-    x_abs = (spec.algorithm == :LOG) ? x : oftype(x, spec.x_r) + x
-    p_si = _x_to_p(x_abs, Val(spec.x_type), Val(spec.p_type), Val(spec.algorithm), spec)
-    return _p_to_s(p_si, Val(spec.s_type), spec)
+    x_abs = (A === Val{:LOG}) ? x : oftype(x, spec.x_r) + x
+    p_si = _x_to_p(x_abs, X(), P(), A(), spec)
+    return _p_to_s(p_si, S(), spec)
 end
 
 """
@@ -503,8 +504,8 @@ Convert a world coordinate (S-type SI) to an intermediate coordinate
 offset ``x = X - X_r`` (X-type SI) for a single spectral axis.
 For LOG axes the offset is ``S_r·ln(S/S_r)``.
 """
-function _spectral_world_to_x(world, spec::SpectralSpec)
-    p_si = _s_to_p(world, Val(spec.s_type), spec)
-    x_abs = _p_to_x(p_si, Val(spec.p_type), Val(spec.x_type), Val(spec.algorithm), spec)
-    return (spec.algorithm == :LOG) ? x_abs : x_abs - oftype(x_abs, spec.x_r)
+function _spectral_world_to_x(world, spec::SpectralSpec{X, P, S, A}) where {X, P, S, A}
+    p_si = _s_to_p(world, S(), spec)
+    x_abs = _p_to_x(p_si, P(), X(), A(), spec)
+    return (A === Val{:LOG}) ? x_abs : x_abs - oftype(x_abs, spec.x_r)
 end
