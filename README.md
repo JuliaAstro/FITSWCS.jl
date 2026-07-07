@@ -1,17 +1,23 @@
 # FITSWCS.jl
 
 FITSWCS.jl is a pure-Julia implementation of core FITS World Coordinate System
-transforms. The main public interface for constructing WCS objects is `WCS`
+transformations. The main public interface for constructing WCS objects is `WCS`
 which accepts dictionary input and returns a `WCSTransform`.
 Other types (e.g., those from FITSIO.jl and FITSFiles.jl)
-are parsed to dictionaries and then parsed to `WCSTransform` in extensions.
+are parsed to dictionaries and then passed to `WCSTransform` in package extensions.
 
 This package is still under active development.  It currently focuses on
 the published FITS WCS standard, though we are interested in contributions to
 support non-standard FITS WCS features. Our implementations seek to optimize
 scalar-path performance (allocation free `pixel_to_world` and `world_to_pixel`).
+Batched versions of these functions are automatically multi-threaded and
+take in `naxis x npoints` matrices, where each column is one coordinate.
+Vectors of vectors (e.g., `[[1.0, 2.0], [2.0, 3.0]]`) are also supported.
 
 ## Quick Start
+
+Pixel coordinates use the FITS WCS convention: pixel `1` is the center of the
+first pixel.  Coordinate vectors are ordered by FITS WCS axis number.
 
 ```julia
 using FITSWCS
@@ -30,10 +36,46 @@ world = pixel_to_world(wcs, [512.0, 512.0])
 pixel = world_to_pixel(wcs, world)
 ```
 
-Pixel coordinates use the FITS WCS convention: pixel `1` is the center of the
-first pixel.  Coordinate vectors are ordered by FITS WCS axis number.  Batch
-inputs are `naxis x npoints` matrices, where each column is one coordinate.
-Vectors of vectors (e.g., `[[1.0, 2.0], [2.0, 3.0]]`) are also supported.
+### FITS Loader Extensions
+
+When the corresponding package is loaded, `WCS` accepts FITSIO.jl and FITSFiles.jl
+native types directly.  Headers are converted to `Dict` and passed through
+to the core parser.
+
+**FITSIO.jl:**
+
+```julia
+using FITSIO, FITSWCS
+
+# From an in-memory FITSHeader.
+fits = FITS("cube.fits")
+hdr = read_header(fits[1])
+wcs = WCS(hdr)
+
+# Directly from an HDU; header is read internally.
+wcs = WCS(fits[1])
+
+# If external table data is specified in the header
+# (-TAB, D2IM, CPDIS), pass the file as fobj.
+wcs = WCS(fits[1]; fobj = fits)
+```
+
+**FITSFiles.jl:**
+
+```julia
+using FITSFiles, FITSWCS
+
+# From a vector of parsed FITS cards.
+fits = FITSFiles.read("cube.fits")
+wcs = WCS(fits[1].cards)
+
+# Directly from an HDU (cards extracted internally).
+wcs = WCS(fits[1])
+
+# If external table data is specified in the header,
+# pass the full HDU vector as fobj.
+wcs = WCS(fits[1]; fobj = fits)
+```
 
 ## Programmatic Construction
 
@@ -93,38 +135,6 @@ wcs_asec = WCS(header; preserve_units=true)
 world_asec = pixel_to_world(wcs_asec, [512.0, 512.0])  # returns arcsec, not degrees
 ```
 
-## Spectral Coordinates (Paper III)
-
-All FITS Paper III spectral types and algorithms are supported:
-
-| S-type | Description | Algorithms |
-|---|---|---|
-| `FREQ` | Frequency | linear, `-LOG`, `-F2W`, `-F2V`, `-F2A` |
-| `WAVE` | Vacuum wavelength | linear, `-LOG`, `-W2F`, `-W2V`, `-W2A` |
-| `VELO` | Relativistic velocity | linear, `-V2F`, `-V2W`, `-V2A` |
-| `AWAV` | Air wavelength | linear, `-A2F`, `-A2W`, `-A2V` |
-| `AFRQ`, `ENER`, `WAVN` | Angular frequency, energy, wavenumber | linear |
-| `VRAD`, `VOPT`, `ZOPT`, `BETA` | Derived velocity/redshift types | linear |
-| Any wavelength type | As above | `-GRI` (grism in vacuum), `-GRA` (grism in air) |
-
-Grism coordinates use the ideal disperser equation (grating interference +
-prism refraction) from Paper III Section 5.  Seven PV parameters
-(`PVi_0`–`PVi_6`) specify the disperser properties.
-
-Air-wavelength conversions use the IUGG 1999 / Ciddor (1996) refractive-index
-relation (Paper III eq. 4). Note that the WCSLIB code diverges from the published
-paper and uses the Cox/Edlén (IAU 1957) relation.  The two differ by a nearly
-constant ratio IUGG/Cox ≈ 1.000015 across the optical range.
-
-Cross-type algorithms (e.g. `WAVE-F2W`) compute
-the full X→P→S chain, including derivative scaling of the CD matrix entry.
-Tabular spectral axes (`-TAB`) use binary-table coordinate arrays via `fobj`.
-
-Rest-frequency/wavelength and reference-frame keywords (`RESTFRQ`, `RESTWAV`,
-`SPECSYS`, etc.) are parsed and stored on the transform for downstream
-frame-correction code, but no velocity-frame correction is performed by this
-package.
-
 ## Supported Celestial Coordinate Systems
 
 Celestial axes are identified by their CTYPE prefix:
@@ -162,44 +172,103 @@ Distorted tangent plane: `TPV`, `TPD`
 
 Unknown projection codes throw an informative error at transform time.
 
-## FITS Loader Extensions
+## Spectral Coordinates
 
-When the corresponding package is loaded, `WCS` accepts FITSIO and FITSFiles
-native types directly.  Headers are converted to `Dict` and passed through
-to the core parser.
+All FITS Paper III spectral types and algorithms are supported:
 
-**FITSIO.jl:**
+| S-type | Description | Algorithms |
+|---|---|---|
+| `FREQ` | Frequency | linear, `-LOG`, `-F2W`, `-F2V`, `-F2A` |
+| `WAVE` | Vacuum wavelength | linear, `-LOG`, `-W2F`, `-W2V`, `-W2A` |
+| `VELO` | Relativistic velocity | linear, `-V2F`, `-V2W`, `-V2A` |
+| `AWAV` | Air wavelength | linear, `-A2F`, `-A2W`, `-A2V` |
+| `AFRQ`, `ENER`, `WAVN` | Angular frequency, energy, wavenumber | linear |
+| `VRAD`, `VOPT`, `ZOPT`, `BETA` | Derived velocity/redshift types | linear |
+| Any wavelength type | As above | `-GRI` (grism in vacuum), `-GRA` (grism in air) |
 
-```julia
-using FITSIO, FITSWCS
+Grism coordinates use the ideal disperser equation (grating interference +
+prism refraction) from Paper III Section 5.  Seven PV parameters
+(`PVi_0`–`PVi_6`) specify the disperser properties.
 
-# From an in-memory FITSHeader.
-fits = FITS("cube.fits")
-hdr = read_header(fits[1])
-wcs = WCS(hdr)
+Air-wavelength conversions use the IUGG 1999 / Ciddor (1996) refractive-index
+relation (Paper III eq. 4). Note that the WCSLIB code diverges from the published
+paper and uses the Cox/Edlén (IAU 1957) relation.  The two differ by a nearly
+constant ratio IUGG/Cox ≈ 1.000015 across the optical range.
 
-# Directly from an HDU; header is read internally.
-wcs = WCS(fits[1])
+Cross-type algorithms (e.g. `WAVE-F2W`) compute
+the full X→P→S chain, including derivative scaling of the CD matrix entry.
+Tabular spectral axes (`-TAB`) use binary-table coordinate arrays via `fobj`.
 
-# With external table data (-TAB, D2IM, CPDIS), pass the file as fobj.
-wcs = WCS(fits[1]; fobj = fits)
-```
+Rest-frequency/wavelength and reference-frame keywords (`RESTFRQ`, `RESTWAV`,
+`SPECSYS`, etc.) are parsed and stored on the transform for downstream
+frame-correction code, but no velocity-frame correction is performed by this
+package.
 
-**FITSFiles.jl:**
+## Benchmarks
+Output from `benchmark/benchmarks.jl` run with on an Intel 12600K CPU with Julia 1.12.6.
+*batch-* entries use the batched interface and are run
+multi-threaded with 8 threads. *batch-100* use 100 coordinates
+and *batch-1M* use 10^6 coordinates.
+These benchmarks figures are re-run rarely so
+performance on `main` may diverge from results here in the future.
 
-```julia
-using FITSFiles, FITSWCS
+Benchmark suite: pixel_to_world
+┌────────────────────────────┬─────────────┬───────────┬────────┐
+│ Benchmark                  │ Median Time │    Memory │ Allocs │
+├────────────────────────────┼─────────────┼───────────┼────────┤
+│ 2D-coupled-TAB/scalar      │   49.050 ns │   0 bytes │      0 │
+│ 3D-cube-TAB/batch-100      │    6.267 μs │  7.71 KiB │     45 │
+│ 3D-cube-TAB/scalar         │   87.500 ns │   0 bytes │      0 │
+│ 3D-cube-spec/scalar        │   71.580 ns │   0 bytes │      0 │
+│ 3D-cube/scalar             │   69.270 ns │   0 bytes │      0 │
+│ AIT/scalar                 │   84.030 ns │   0 bytes │      0 │
+│ TAN-SIP-PaperIV/scalar     │  157.830 ns │   0 bytes │      0 │
+│ TAN-SIP/scalar             │  101.000 ns │   0 bytes │      0 │
+│ TAN/batch-100/Float32      │    4.947 μs │  5.30 KiB │     44 │
+│ TAN/batch-100/Float64      │    5.531 μs │  6.02 KiB │     44 │
+│ TAN/batch-1M/Float32       │    9.378 ms │  7.63 MiB │     45 │
+│ TAN/batch-1M/Float64       │   14.073 ms │ 15.26 MiB │     45 │
+│ TAN/scalar                 │   65.080 ns │   0 bytes │      0 │
+│ TAN/scalar/SVector Float32 │   49.320 ns │   0 bytes │      0 │
+│ TAN/scalar/SVector Float64 │   64.710 ns │   0 bytes │      0 │
+│ TAN/scalar/Tuple           │   65.450 ns │   0 bytes │      0 │
+│ TAN/scalar/preserve_units  │   65.310 ns │   0 bytes │      0 │
+│ grism/AWAV-GRA/scalar      │   16.330 ns │   0 bytes │      0 │
+└────────────────────────────┴─────────────┴───────────┴────────┘
 
-# From a vector of parsed FITS cards.
-fits = FITSFiles.read("cube.fits")
-wcs = WCS(fits[1].cards)
+Benchmark suite: world_to_pixel
+┌───────────────────────────┬─────────────┬───────────┬────────┐
+│ Benchmark                 │ Median Time │    Memory │ Allocs │
+├───────────────────────────┼─────────────┼───────────┼────────┤
+│ 2D-coupled-TAB/scalar     │   50.110 ns │   0 bytes │      0 │
+│ 3D-cube-TAB/batch-100     │    6.754 μs │  7.71 KiB │     45 │
+│ 3D-cube-TAB/scalar        │   99.030 ns │   0 bytes │      0 │
+│ 3D-cube-spec/scalar       │   82.890 ns │   0 bytes │      0 │
+│ 3D-cube/scalar            │   71.060 ns │   0 bytes │      0 │
+│ AIT/scalar                │   75.060 ns │   0 bytes │      0 │
+│ TAN-SIP-PaperIV/scalar    │  528.620 ns │   0 bytes │      0 │
+│ TAN-SIP/scalar            │  236.460 ns │   0 bytes │      0 │
+│ TAN/batch-100/Float32     │    4.894 μs │  5.30 KiB │     44 │
+│ TAN/batch-100/Float64     │    5.781 μs │  6.02 KiB │     44 │
+│ TAN/batch-1M/Float32      │   10.716 ms │  7.63 MiB │     45 │
+│ TAN/batch-1M/Float64      │   13.327 ms │ 15.27 MiB │     45 │
+│ TAN/scalar                │   62.560 ns │   0 bytes │      0 │
+│ TAN/scalar/preserve_units │   62.670 ns │   0 bytes │      0 │
+│ grism/AWAV-GRA/scalar     │   15.780 ns │   0 bytes │      0 │
+└───────────────────────────┴─────────────┴───────────┴────────┘
 
-# Directly from an HDU (cards extracted internally).
-wcs = WCS(fits[1])
-
-# With external table data, pass the full HDU vector as fobj.
-wcs = WCS(fits[1]; fobj = fits)
-```
+Benchmark suite: parsing
+┌────────────────────┬─────────────┬───────────┬────────┐
+│ Benchmark          │ Median Time │    Memory │ Allocs │
+├────────────────────┼─────────────┼───────────┼────────┤
+│ WCS/3D-cube        │  368.853 μs │ 68.83 KiB │   1850 │
+│ WCS/3D-cube-TAB    │  320.728 μs │ 69.78 KiB │   1839 │
+│ WCS/3D-cube-spec   │  720.092 μs │ 78.62 KiB │   2115 │
+│ WCS/AIT            │  246.903 μs │ 44.05 KiB │   1192 │
+│ WCS/TAN            │  328.439 μs │ 44.09 KiB │   1193 │
+│ WCS/TAN-SIP        │  450.694 μs │ 66.75 KiB │   1737 │
+│ WCS/grism/AWAV-GRA │  294.696 μs │ 37.89 KiB │    984 │
+└────────────────────┴─────────────┴───────────┴────────┘
 
 ## Known Limitations
 
@@ -207,5 +276,3 @@ wcs = WCS(fits[1]; fobj = fits)
   `SSYSOBS`, `VELOSYS`, `ZSOURCE`, `SSYSSRC`, `MJD-AVG`, `OBSGEO-X/Y/Z`)
   is not implemented; the keywords are parsed and stored for downstream
   use or a future package-level correction step.
-
-Benchmarks for representative paths live under `benchmark/`.
