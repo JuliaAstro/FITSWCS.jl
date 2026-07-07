@@ -6,8 +6,7 @@ which accepts dictionary input and returns a `WCSTransform`.
 Other types (e.g., those from FITSIO.jl and FITSFiles.jl)
 are parsed to dictionaries and then passed to `WCSTransform` in package extensions.
 
-This package is still under active development.  It currently focuses on
-the published FITS WCS standard, though we are interested in contributions to
+This package focuses on the published FITS WCS standard, though we are interested in contributions to
 support non-standard FITS WCS features. Our implementations seek to optimize
 scalar-path performance (allocation free `pixel_to_world` and `world_to_pixel`).
 Batched versions of these functions are automatically multi-threaded and
