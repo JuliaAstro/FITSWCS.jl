@@ -835,8 +835,8 @@ end
 
         pixel_vectors = [pixels[:, k] for k in axes(pixels, 2)]
         world_vectors = pixel_to_world(wcs, pixel_vectors)
-        @test world_vectors == [worlds[:, k] for k in axes(worlds, 2)]
-        @test world_to_pixel(wcs, world_vectors) ≈ pixel_vectors atol=1e-8
+        @test world_vectors ≈ worlds
+        @test world_to_pixel(wcs, world_vectors) ≈ pixels atol=1e-8
     end
 
     @testset "Time and Stokes axes remain linear" begin
