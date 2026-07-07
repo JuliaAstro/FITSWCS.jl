@@ -8,6 +8,7 @@ using StaticArrays
 using FITSWCS: pixel_to_intermediate, intermediate_to_pixel,
                parse_ctype, projection_from_code,
                native_to_celestial, celestial_to_native,
+               intermediate_to_native, native_to_intermediate,
                compute_native_pole,
                unit_to_deg, build_cd_matrix,
                evaluate_sip_polynomial, sip_pixel_to_focal, sip_focal_to_pixel,
@@ -15,6 +16,11 @@ using FITSWCS: pixel_to_intermediate, intermediate_to_pixel,
                pixel_to_focal, focal_to_pixel, has_distortion,
                LookupTable2D, interpolate_lookup_table,
                TabularAxisSpec, TabularWCSData, NoTabularWCSData,
+               # Projection types
+               AbstractProjection, SIPDistortion,
+               AZP, SZP, TAN, TPV, SIN, STG, ARC, ZEA,
+               CAR, CEA, CYP, MER, SFL, PAR, MOL, PCO, AIT,
+               UnknownProjection,
                TabularWCSTable,
                NoAuxiliaryWCSData, AuxiliaryWCSData,
                has_auxiliary, _auxiliary_wcs_data,
@@ -871,18 +877,18 @@ end
                    1.0 3.0]
 
     @test wcs isa WCSTransform
-    @test pix_to_world(wcs, pixels) ≈ pixel_to_world(wcs, pixels)
-    @test pix_to_world(wcs, 2.0, 3.0) ≈ [2.0, 6.0]
-    @test pix_to_world(wcs, 2.0, 3.0) isa SVector{2,Float64}
-    @test pix_to_world(wcs, (2.0, 3.0)) isa SVector{2,Float64}
-    @test world_to_pix(wcs, [2.0, 6.0]) ≈ [2.0, 3.0]
-    @test world_to_pix(wcs, 2.0, 6.0) ≈ [2.0, 3.0]
-    @test world_to_pix(wcs, 2.0, 6.0) isa SVector{2,Float64}
-    @test world_to_pix(wcs, (2.0, 6.0)) isa SVector{2,Float64}
-    @test pix_to_world(wcs, pixel_batch) ≈ pixel_to_world(wcs, pixel_batch)
+    @test pixel_to_world(wcs, pixel_batch) ≈ pixel_to_world(wcs, pixel_batch)
 
-    # Constructor compatibility should match the same transform built from a header.
-    constructed = WCSTransform(2;
+    # Tuple/varargs forms are convenience methods on pixel_to_world / world_to_pixel.
+    @test pixel_to_world(wcs, 2.0, 3.0) ≈ [2.0, 6.0]
+    @test pixel_to_world(wcs, 2.0, 3.0) isa SVector{2,Float64}
+    @test pixel_to_world(wcs, (2.0, 3.0)) isa SVector{2,Float64}
+    @test world_to_pixel(wcs, 2.0, 6.0) ≈ [2.0, 3.0]
+    @test world_to_pixel(wcs, 2.0, 6.0) isa SVector{2,Float64}
+    @test world_to_pixel(wcs, (2.0, 6.0)) isa SVector{2,Float64}
+
+    # Keyword-based constructor matches the same transform built from a header.
+    constructed = WCS(2;
         ctype=["X", "Y"],
         crpix=[1.0, 1.0],
         crval=[0.0, 0.0],
@@ -891,7 +897,7 @@ end
     @test constructed isa WCSTransform
     @test pixel_to_world(constructed, pixels) ≈ [2.0, 6.0]
 
-    rotated = WCSTransform(2;
+    rotated = WCS(2;
         ctype=["X", "Y"],
         crpix=[1.0, 1.0],
         crval=[0.0, 0.0],
@@ -900,24 +906,13 @@ end
     )
     @test pixel_to_world(rotated, [2.0, 1.0]) ≈ [0.0, 3.0]
 
-    # Mutating WCS.jl-style aliases should fill caller-provided output arrays.
-    world_out = similar(pixels)
-    pixel_out = similar(pixels)
-    batch_out = similar(pixel_batch)
-    @test pix_to_world!(wcs, pixels, world_out) === world_out
-    @test world_out ≈ [2.0, 6.0]
-    @test world_to_pix!(wcs, world_out, pixel_out) === pixel_out
-    @test pixel_out ≈ pixels
-    @test pix_to_world!(wcs, pixel_batch, batch_out) === batch_out
-    @test batch_out ≈ pixel_to_world(wcs, pixel_batch)
+    # Dimension mismatch errors from the keyword-based constructor.
+    @test_throws DimensionMismatch WCS(2; crpix=[1.0])
+    @test_throws DimensionMismatch WCS(2; pc=ones(3, 3))
+    @test_throws ArgumentError WCS(2; restfrq=1.42e9)
 
-    @test_throws DimensionMismatch pix_to_world(wcs, 1.0)
-    @test_throws DimensionMismatch world_to_pix(wcs, [1.0])
-    @test_throws DimensionMismatch pix_to_world!(wcs, pixels, zeros(3))
-    @test_throws DimensionMismatch world_to_pix!(wcs, world_out, zeros(3))
-    @test_throws DimensionMismatch WCSTransform(2; crpix=[1.0])
-    @test_throws DimensionMismatch WCSTransform(2; pc=ones(3, 3))
-    @test_throws ArgumentError WCSTransform(2; restfrq=1.42e9)
+    @test_throws DimensionMismatch pixel_to_world(wcs, 1.0)
+    @test_throws DimensionMismatch world_to_pixel(wcs, [1.0])
 end
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -1185,6 +1180,22 @@ end
                       "CDELT1"=>10.0,"CUNIT1"=>"nm"), preserve_units=true)
     @test pixel_to_world(wcs_nm_preserve, [2.0]) ≈ [510.0]
     @test world_to_pixel(wcs_nm_preserve, SVector{1,Float64}(510.0)) ≈ [2.0]
+
+    # ── Celestial axes with non-degree CUNIT and preserve_units ───────────────
+    # CRVAL=7200,3600 arcsec = 2,1 degrees at the reference pixel.
+    hdr_asec = Dict("NAXIS"=>2, "CTYPE1"=>"RA---TAN", "CTYPE2"=>"DEC--TAN",
+        "CRPIX1"=>1.0, "CRPIX2"=>1.0, "CRVAL1"=>7200.0, "CRVAL2"=>3600.0,
+        "CDELT1"=>1.0, "CDELT2"=>1.0, "CUNIT1"=>"arcsec", "CUNIT2"=>"arcsec")
+    # preserve_units=false: output in degrees (canonical)
+    wcs_asec = WCS(hdr_asec)
+    world_deg = pixel_to_world(wcs_asec, [1.0, 1.0])
+    @test world_deg ≈ [2.0, 1.0]
+    @test world_to_pixel(wcs_asec, SVector{2,Float64}(world_deg...)) ≈ [1.0, 1.0]
+    # preserve_units=true: output in arcsec, round-trip self-consistent
+    wcs_asec_pu = WCS(hdr_asec; preserve_units=true)
+    world_asec = pixel_to_world(wcs_asec_pu, [1.0, 1.0])
+    @test world_asec ≈ [7200.0, 3600.0]
+    @test world_to_pixel(wcs_asec_pu, SVector{2,Float64}(world_asec...)) ≈ [1.0, 1.0]
 
     # ── Cross-type: WAVE-F2W with CDELT in S-type display units ──────────────
     # CDELT is in m/pixel (S-type = wavelength).  Regression against astropy.

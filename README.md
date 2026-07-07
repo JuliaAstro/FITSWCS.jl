@@ -33,23 +33,27 @@ first pixel.  Coordinate vectors are ordered by FITS WCS axis number.  Batch
 inputs are `naxis x npoints` matrices, where each column is one coordinate, or
 vectors of coordinate vectors.
 
-## WCS.jl-Style Names
+World coordinates are returned in canonical units by default (degrees for
+celestial axes, SI for spectral axes).  Pass `preserve_units=true` to `WCS()`
+to return values in the original header `CUNIT` instead:
 
-For migration experiments, FITSWCS.jl also exports WCS.jl-style helper names:
+```julia
+wcs_asec = WCS(header; preserve_units=true)
+world_asec = pixel_to_world(wcs_asec, [512.0, 512.0])  # arcsec, not degrees
+```
 
-- `WCS(header)` as the main parser/constructor for FITS-like headers
-- `WCSTransform(naxis; kwds...)` for WCS.jl-style programmatic construction
-  from core vectors/matrices such as `crpix`, `crval`, `cdelt`, `ctype`,
-  `cunit`, `pc`, `cd`, and `crota`
-- `pix_to_world(wcs, ...)` as an alias for `pixel_to_world(wcs, ...)`
-- `world_to_pix(wcs, ...)` as an alias for `world_to_pixel(wcs, ...)`
-- `pix_to_world!(wcs, pixels, worlds)` and
-  `world_to_pix!(wcs, worlds, pixels)` for caller-provided output arrays
+## Programmatic Construction
 
-These aliases keep FITSWCS.jl's FITS 1-based pixel convention.  They do not
-implement WCS.jl's full status-returning transform API, intermediate work-array
-keywords, or an Astropy-style `origin` argument / shim for zero-based pixel
-coordinates.
+In addition to `WCS(header)`, a keyword-based constructor accepts core WCS
+vectors and matrices directly:
+
+```julia
+wcs = WCS(2; ctype=["RA---TAN", "DEC--TAN"], crpix=[512.0, 512.0],
+          crval=[83.8221, -5.3911], cdelt=[-2.7778e-4, 2.7778e-4])
+```
+
+Supported keywords: `crpix`, `crval`, `cdelt`, `ctype`, `cunit`, `pc`, `cd`,
+`crota`, `lonpole`, `latpole`, `preserve_units`.
 
 ## Supported Header Keywords
 
@@ -68,10 +72,42 @@ The parser currently supports these image-WCS keyword families:
 - pre-2012 SCAMP TPV compatibility: `-TAN` celestial CTYPEs with high-index
   `PV` coefficients are interpreted as `-TPV`, and `TPV` / `TPD` take
   precedence over SIP when both are present
+- spectral: `RESTFRQ`, `RESTWAV`, `SPECSYS`, `SSYSOBS`, `VELOSYS`, `ZSOURCE`,
+  `SSYSSRC`
+- tabular (`-TAB`): `PSi_0`, `PSi_1`, etc. with binary table coordinate arrays
+  via `fobj`
+- observation metadata: `MJD-AVG`, `DATE-AVG`, `OBSGEO-X/Y/Z`
+- celestial reference frame: `RADESYS`, `EQUINOX`
+- WCS identification: `WCSNAME`
 
-Celestial units are normalized to degrees at the public API boundary.  Linear,
-spectral, time, and Stokes axes currently remain in the units encoded by their
-header linear transform.
+Celestial coordinates are normalized to **degrees** and spectral coordinates to
+**SI units** (Hz, m, m/s) at parse time.  `pixel_to_world` returns these
+canonical units by default; pass `preserve_units=true` to `WCS()` to return
+values in the original header `CUNIT` instead.  Linear, time, and Stokes axes
+remain in the units encoded by their header linear transform.
+
+## Spectral Coordinates (Paper III)
+
+All FITS Paper III spectral types and algorithms are supported:
+
+| S-type | Description | Algorithms |
+|---|---|---|
+| `FREQ` | Frequency | linear, `-LOG`, `-F2W`, `-F2V`, `-F2A` |
+| `WAVE` | Vacuum wavelength | linear, `-LOG`, `-W2F`, `-W2V`, `-W2A` |
+| `VELO` | Relativistic velocity | linear, `-V2F`, `-V2W`, `-V2A` |
+| `AWAV` | Air wavelength | linear, `-A2F`, `-A2W`, `-A2V` |
+| `AFRQ`, `ENER`, `WAVN` | Angular frequency, energy, wavenumber | linear |
+| `VRAD`, `VOPT`, `ZOPT`, `BETA` | Derived velocity/redshift types | linear |
+
+Air-wavelength conversions use the IUGG 1999 / Ciddor (1996) refractive-index
+relation (Paper III eq. 4).  Cross-type algorithms (e.g. `WAVE-F2W`) compute
+the full X→P→S chain, including derivative scaling of the CD matrix entry.
+Tabular spectral axes (`-TAB`) use binary-table coordinate arrays via `fobj`.
+
+Rest-frequency/wavelength and reference-frame keywords (`RESTFRQ`, `RESTWAV`,
+`SPECSYS`, etc.) are parsed and stored on the transform for downstream
+frame-correction code, but no velocity-frame correction is performed by this
+package.
 
 ## Supported Celestial Coordinate Systems
 
@@ -124,21 +160,12 @@ weak dependency; both loader-specific methods are still isolated in extensions.
 
 ## Known Limitations
 
-- **Paper III spectral algorithms**: implemented for all algorithm codes
-  (`LOG`, `F2W`, `W2F`, `F2V`, `V2F`, `W2V`, `V2W`, air-wavelength cross-conversions)
-  and all S-types (`FREQ`, `AFRQ`, `ENER`, `WAVN`, `VRAD`, `WAVE`, `VOPT`,
-  `ZOPT`, `AWAV`, `VELO`, `BETA`).  Rest frequency/wavelength (`RESTFRQ`,
-  `RESTWAV`) and reference-frame keywords (`SPECSYS`, `SSYSOBS`, `VELOSYS`,
-  `ZSOURCE`, `SSYSSRC`, `MJD-AVG`, `OBSGEO-X/Y/Z`) are parsed and stored for
-  downstream frame-correction code, but no frame-correction math is performed
-  in the default transforms — matching WCSLIB and astropy.
+- Velocity-frame correction math (barycentric/LSRK conversion using `SPECSYS`,
+  `SSYSOBS`, `VELOSYS`, `ZSOURCE`, `SSYSSRC`, `MJD-AVG`, `OBSGEO-X/Y/Z`)
+  is not yet implemented; the keywords are parsed and stored for downstream
+  use or a future package-level correction step.
 - **Grism** algorithm codes `GRI`/`GRA` are not yet implemented.
-- **Spectral world coordinates for algorithm-coded axes are returned in SI**
-  (e.g. Hz, m, m/s) regardless of `CUNIT`; display-unit conversion at the API
-  boundary is not yet wired in.
 - **Time and Stokes axes**: transform linearly but carry no physical
   interpretation (e.g., `MJDREF`, `DATE-OBS`, `TIMESYS`, polarization state).
-- **Full WCS.jl API compatibility**: only a partial compatibility layer exists
-  (`WCS`, `pix_to_world`, `world_to_pix`, mutating `!` variants).
 
 Benchmarks for representative paths live under `benchmark/`.

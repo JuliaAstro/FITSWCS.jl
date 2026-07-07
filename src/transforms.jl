@@ -222,9 +222,11 @@ function pixel_to_world(wcs::WCSTransform, pixel::AbstractVector)
     return world
 end
 
-# Convenience: accept tuples and static-array-likes
+# Convenience: accept tuples, static-array-likes, and scalar varargs.
 pixel_to_world(wcs::WCSTransform, pixel::Tuple{Vararg{Real}}) =
     pixel_to_world(wcs, _coordinate_vector(pixel))
+pixel_to_world(wcs::WCSTransform, coords::Real...) =
+    pixel_to_world(wcs, _coordinate_vector(coords))
 
 """
     world_to_pixel(wcs, world) -> pixel
@@ -290,6 +292,8 @@ end
 
 world_to_pixel(wcs::WCSTransform, world::Tuple{Vararg{Real}}) =
     world_to_pixel(wcs, _coordinate_vector(world))
+world_to_pixel(wcs::WCSTransform, coords::Real...) =
+    world_to_pixel(wcs, _coordinate_vector(coords))
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Batch transforms
