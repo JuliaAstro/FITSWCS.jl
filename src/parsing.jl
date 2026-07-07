@@ -53,6 +53,12 @@ array indices the values are numerically identical; no offset is required.
 - `aux`        – resolved auxiliary WCS data, or `NoAuxiliaryWCSData`.
 - `lon_axis`   – 1-based index of the longitude axis; 0 if no celestial axes.
 - `lat_axis`   – 1-based index of the latitude axis; 0 if no celestial axes.
+- `radesys`    – celestial reference system, e.g. ``"ICRS"``, ``"FK5"``;
+  defaults to ``"ICRS"`` for equatorial axes.  Not used internally.
+- `equinox`    – equinox epoch for dynamical systems (``EQUINOX`` keyword).
+  ``NaN`` when absent.  Not used internally.
+- `wcsname`    – human-readable WCS name (``WCSNAME`` keyword).  Not used
+  internally.
 """
 struct WCSTransform{N, L, P <: Union{Nothing, AbstractProjection}, D <: AbstractDistortionPipeline, A <: AbstractAuxiliaryWCSData, O <: Union{Nothing, ObservationSpec}}
     naxis::Int
@@ -71,6 +77,9 @@ struct WCSTransform{N, L, P <: Union{Nothing, AbstractProjection}, D <: Abstract
     lon_axis::Int             # 1-based index; 0 = no celestial lon axis
     lat_axis::Int             # 1-based index; 0 = no celestial lat axis
     obs::O                    # spectral reference-frame metadata
+    radesys::String           # RADESYS / default "ICRS" -- not used internally
+    equinox::Float64          # EQUINOX -- not used internally
+    wcsname::String           # WCSNAME -- not used internally
     # Unit scaling for preserve_units feature.
     # unit_scaling[i] converts CUNIT to canonical: canonical = scaling * cunit_value.
     # Set to all 1.0 when preserve_units=false.
@@ -677,7 +686,7 @@ function build_cd_matrix(header::AbstractDict, naxis::Int,
         # Paper I, Appendix A, Eq. A2:
         # CD11 = CDELT1*cos(rho)   CD12 = -CDELT2*sin(rho)
         # CD21 = CDELT1*sin(rho)   CD22 =  CDELT2*cos(rho)
-        rho = crota * (π / 180.0)
+        rho = deg2rad(crota)
         cr, sr = cos(rho), sin(rho)
         # Fill in only 2D part for CROTA; off-diagonal higher axes stay 0.
         for k in 1:naxis
@@ -959,6 +968,14 @@ function WCS(header::AbstractDict; fobj = nothing, alt::Char = ' ', minerr::Real
         delta_p = rad2deg(dp)
     end
 
+    # ── Reference-frame metadata (pass-through, not used internally) ──────────
+    radesys = String(get(header, "RADESYS$(alt_str)",
+                     get(header, "RADESYS", "ICRS")))
+    equinox = Float64(get(header, "EQUINOX$(alt_str)",
+                      get(header, "EQUINOX", NaN)))
+    wcsname = String(get(header, "WCSNAME$(alt_str)",
+                     get(header, "WCSNAME", "")))
+
     # ── Build observation-level metadata for frame corrections ────────────────
     obs = _build_observation_spec(header, alt_str)
 
@@ -970,7 +987,100 @@ function WCS(header::AbstractDict; fobj = nothing, alt::Char = ' ', minerr::Real
         ctype, cunit,
         lonpole, latpole, alpha_p, delta_p,
         projection, pipeline, aux, lon_axis, lat_axis, obs,
+        radesys, equinox, wcsname,
         preserve_units,
         SVector{naxis, Float64}(unit_scaling_vec),
     )
+end
+
+# ── Keyword-based constructor for programmatic WCS construction. ────────────────
+
+"""
+    WCS(naxis::Integer; preserve_units::Bool = false, kwds...) -> WCSTransform
+
+Construct a transform from WCS.jl-style keyword vectors and matrices.
+
+Supported keywords are `crpix`, `crval`, `cdelt`, `ctype`, `cunit`, `pc`, `cd`,
+`crota`, `lonpole`, `latpole`, `radesys`, `equinox`, `wcsname`.
+More specialized wcslib fields remain unsupported in this pure-Julia constructor.
+"""
+function WCS(naxis::Integer; preserve_units::Bool = false, kwds...)
+    naxis >= 1 || throw(ArgumentError("naxis must be >= 1, got $naxis"))
+
+    # Translate the supported property-style inputs into ordinary FITS keys.
+    header = Dict{String,Any}("NAXIS" => Int(naxis), "WCSAXES" => Int(naxis))
+    for (key, value) in kwds
+        _constructor_keyword_to_header!(header, Int(naxis), key, value)
+    end
+
+    # Reuse the main parser so validation and projection setup stay centralized.
+    return WCS(header; preserve_units = preserve_units)
+end
+
+function _constructor_keyword_to_header!(header::Dict{String,Any},
+                                         naxis::Int,
+                                         key::Symbol,
+                                         value)
+    # Vector-valued WCS properties map directly to indexed FITS keywords.
+    if key === :crpix
+        _put_axis_values!(header, "CRPIX", value, naxis)
+    elseif key === :crval
+        _put_axis_values!(header, "CRVAL", value, naxis)
+    elseif key === :cdelt
+        _put_axis_values!(header, "CDELT", value, naxis)
+    elseif key === :ctype
+        _put_axis_values!(header, "CTYPE", value, naxis)
+    elseif key === :cunit
+        _put_axis_values!(header, "CUNIT", value, naxis)
+    elseif key === :crota
+        _put_axis_values!(header, "CROTA", value, naxis)
+    elseif key === :pc
+        _put_matrix_values!(header, "PC", value, naxis)
+    elseif key === :cd
+        _put_matrix_values!(header, "CD", value, naxis)
+    elseif key === :lonpole
+        header["LONPOLE"] = value
+    elseif key === :latpole
+        header["LATPOLE"] = value
+    elseif key === :radesys
+        header["RADESYS"] = value
+    elseif key === :equinox
+        header["EQUINOX"] = value
+    elseif key === :wcsname
+        header["WCSNAME"] = value
+    else
+        throw(ArgumentError("unsupported WCSTransform constructor keyword: $key"))
+    end
+
+    return header
+end
+
+function _put_axis_values!(header::Dict{String,Any},
+                           prefix::AbstractString,
+                           values,
+                           naxis::Int)
+    length(values) == naxis ||
+        throw(DimensionMismatch("$prefix values have length $(length(values)), expected $naxis"))
+
+    # Store each value under the matching FITS numbered keyword.
+    for i in 1:naxis
+        header["$(prefix)$(i)"] = values[i]
+    end
+
+    return header
+end
+
+function _put_matrix_values!(header::Dict{String,Any},
+                             prefix::AbstractString,
+                             values,
+                             naxis::Int)
+    size(values) == (naxis, naxis) ||
+        throw(DimensionMismatch("$prefix matrix has size $(size(values)), expected ($naxis, $naxis)"))
+
+    # Store matrices in FITS world-axis by pixel-axis order.
+    for i in 1:naxis, j in 1:naxis
+        header["$(prefix)$(i)_$(j)"] = values[i, j]
+    end
+
+    return header
 end

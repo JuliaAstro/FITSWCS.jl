@@ -58,32 +58,7 @@ include("celestial.jl")
 include("parsing.jl")
 include("linear.jl")
 include("transforms.jl")
-include("api.jl")
 
-export
-    # Types
-    WCSTransform,
-    SIPDistortion,
-    AbstractProjection,
-    AZP, SZP, TAN, TPV, SIN, STG, ARC, ZEA, CAR, CEA, CYP, MER, SFL, PAR, MOL, PCO, AIT, UnknownProjection,
-
-    # Parsing
-    WCS,
-
-    # Transforms
-    pixel_to_world,
-    world_to_pixel,
-    pix_to_world,
-    world_to_pix,
-    pix_to_world!,
-    world_to_pix!,
-
-    # Projection primitives (useful for extension and testing)
-    intermediate_to_native,
-    native_to_intermediate,
-
-    # Spherical rotation primitives
-    native_to_celestial,
-    celestial_to_native
+export WCS, WCSTransform, pixel_to_world, world_to_pixel
 
 end # module FITSWCS
