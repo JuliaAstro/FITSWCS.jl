@@ -41,12 +41,55 @@ struct GrismSpec
     # Pass-through for derived S-type derivative calculation (NaN if absent)
     restfrq::Float64        # RESTFRQ -- rest frequency in Hz
     restwav::Float64        # RESTWAV -- rest wavelength in m
+    s_type::Symbol          # S-type for lambda<->S conversion (e.g. :VELO, :FREQ)
+    algorithm::Symbol       # :GRI (vacuum) or :GRA (air)
     # Precomputed intermediates (radians where applicable)
     Gamma_r::Float64        # -tan(theta) -- reference grism parameter
     dGammadw::Float64       # dGamma/dw (constant)
     beta_r::Float64         # gamma_r, reference exit angle (radians)
     const_term::Float64     # (n_r - dn_r * lambda_r) * sin(alpha) -- numerator offset
     inv_denom::Float64      # 1 / t = 1 / (G*m/cos(epsilon) - dn_r*sin(alpha))
+end
+
+# ── Reference wavelength helper ────────────────────────────────────────────────
+
+"""
+    _grism_reference_wavelength(crval_si, s_type, algorithm, restfrq, restwav) -> Float64
+
+Return the reference wavelength lambda_r used by the grism equation, in the
+native wavelength type of the grism (vacuum for GRI, air for GRA).  For
+wavelength S-types, `crval_si` may need vacuum<->air conversion.  For
+frequency/velocity S-types, the S-type value is converted to wavelength.
+"""
+function _grism_reference_wavelength(crval_si::Float64, s_type::Symbol,
+                                     algorithm::Symbol, restfrq::Float64,
+                                     restwav::Float64)
+    # Compute vacuum wavelength from the S-type reference value.
+    lambda_vac = if s_type == :FREQ || s_type == :AFRQ || s_type == :ENER
+        nu_r = s_type == :FREQ ? crval_si :
+               s_type == :AFRQ ? crval_si / (2π) : crval_si / _H_PLANCK
+        _C_LIGHT / nu_r
+    elseif s_type == :VELO || s_type == :VRAD || s_type == :BETA
+        nu_r = if s_type == :VELO
+            _velo_to_freq(crval_si, restfrq)
+        elseif s_type == :VRAD
+            restfrq * (1 - crval_si / _C_LIGHT)
+        else
+            restfrq * sqrt((_C_LIGHT - crval_si) / (_C_LIGHT + crval_si))
+        end
+        _C_LIGHT / nu_r
+    elseif s_type == :WAVN
+        1.0 / crval_si
+    elseif s_type == :AWAV
+        _awav_to_wave(crval_si)      # air -> vacuum
+    else
+        crval_si  # WAVE, VOPT, ZOPT: already vacuum wavelength
+    end
+    # For GRA, the grism equation needs air wavelength.
+    if algorithm == :GRA
+        return _wave_to_awav(lambda_vac)
+    end
+    return lambda_vac
 end
 
 # ── Derivative helper ─────────────────────────────────────────────────────────
@@ -101,14 +144,15 @@ end
 # ── Setup ─────────────────────────────────────────────────────────────────────
 
 """
-    _grism_setup(axis, crval_si, pvs, dlambda_ds, restfrq, restwav) -> GrismSpec
+    _grism_setup(axis, lambda_r, pvs, dlambda_ds, restfrq, restwav, s_type, algorithm) -> GrismSpec
 
 Precompute grism intermediates from PV parameters and the dlambda/dS derivative
 chain.  `pvs` is a 7-element collection of PV values indexed 0..6.  Missing
 entries should be `NaN` to trigger the default value.
 """
-function _grism_setup(axis::Int, crval_si::Float64, pvs, dlambda_ds::Float64,
-                      restfrq::Float64, restwav::Float64)
+function _grism_setup(axis::Int, lambda_r::Float64, pvs, dlambda_ds::Float64,
+                      restfrq::Float64, restwav::Float64, s_type::Symbol,
+                      algorithm::Symbol)
     # Apply defaults for missing PV parameters (NaN signals "not present").
     G       = isfinite(pvs[1]) ? pvs[1] : 0.0      # PVi_0
     m       = isfinite(pvs[2]) ? pvs[2] : 0.0      # PVi_1
@@ -117,8 +161,6 @@ function _grism_setup(axis::Int, crval_si::Float64, pvs, dlambda_ds::Float64,
     dn_r    = isfinite(pvs[5]) ? pvs[5] : 0.0      # PVi_4 (/m)
     epsilon = isfinite(pvs[6]) ? pvs[6] : 0.0      # PVi_5 (deg)
     theta   = isfinite(pvs[7]) ? pvs[7] : 0.0      # PVi_6 (deg)
-
-    lambda_r = crval_si
 
     # Convert angles to radians for computation.
     alpha_rad = deg2rad(alpha)
@@ -145,9 +187,9 @@ function _grism_setup(axis::Int, crval_si::Float64, pvs, dlambda_ds::Float64,
     const_term = (n_r - dn_r * lambda_r) * sin(alpha_rad)         # wcslib w[4]
     inv_denom  = 1.0 / t_denom                                     # wcslib w[5]
 
-    return GrismSpec(axis, crval_si, abs(dGammadw),
+    return GrismSpec(axis, lambda_r, dGammadw,
                      G, m, alpha, n_r, dn_r, epsilon, theta,
-                     restfrq, restwav,
+                     restfrq, restwav, s_type, algorithm,
                      Gamma_r, dGammadw, beta_r, const_term, inv_denom)
 end
 
@@ -172,8 +214,106 @@ function _grism_x_to_world(w, spec::GrismSpec)
     Gamma = T(spec.Gamma_r) + w
     # Step 2: gamma from Gamma.
     gamma = atan(Gamma) + T(spec.beta_r) + deg2rad(T(spec.theta_deg))
-    # Step 3: lambda from gamma (grism equation).
-    return (sin(gamma) + T(spec.const_term)) * T(spec.inv_denom)
+    # Step 3: lambda from gamma (grism equation).  This is vacuum wavelength for
+    # GRI, air wavelength for GRA.
+    lambda = (sin(gamma) + T(spec.const_term)) * T(spec.inv_denom)
+    # Step 4: convert lambda to the requested S-type (e.g. VELO, FREQ).
+    return _grism_lambda_to_s(lambda, spec)
+end
+
+# ── Lambda <-> S-type conversion helpers ──────────────────────────────────────
+
+"""
+    _grism_lambda_to_s(lambda, spec::GrismSpec) -> Float64
+
+Convert the grism equation output (vacuum wavelength for GRI, air wavelength
+for GRA) to the requested S-type world coordinate.
+"""
+function _grism_lambda_to_s(lambda, spec::GrismSpec)
+    T = _float_type(typeof(lambda))
+    st = spec.s_type
+    # lambda from the grism equation: vacuum for GRI, air for GRA.
+    # Convert to vacuum wavelength for non-wavelength S-types.
+    lambda_vac = if spec.algorithm == :GRA
+        st == :AWAV ? lambda : _awav_to_wave(lambda)
+    else
+        st == :AWAV ? _wave_to_awav(lambda) : lambda
+    end
+    if st == :WAVE
+        return lambda_vac  # vacuum wavelength
+    elseif st == :AWAV
+        return spec.algorithm == :GRA ? lambda : _wave_to_awav(lambda)
+    elseif st == :FREQ || st == :AFRQ || st == :ENER
+        nu = T(_C_LIGHT) / lambda_vac
+        if st == :FREQ;     return nu
+        elseif st == :AFRQ; return nu * T(2π)
+        else;               return nu * T(_H_PLANCK)
+        end
+    elseif st == :VELO
+        nu = T(_C_LIGHT) / lambda_vac
+        return _freq_to_velo(nu, T(spec.restfrq))
+    elseif st == :VRAD
+        nu = T(_C_LIGHT) / lambda_vac
+        return T(_C_LIGHT) * (T(spec.restfrq) - nu) / T(spec.restfrq)
+    elseif st == :VOPT
+        return T(_C_LIGHT) * (lambda_vac - T(spec.restwav)) / T(spec.restwav)
+    elseif st == :ZOPT
+        return (lambda_vac - T(spec.restwav)) / T(spec.restwav)
+    elseif st == :BETA
+        nu = T(_C_LIGHT) / lambda_vac
+        return _freq_to_velo(nu, T(spec.restfrq)) / T(_C_LIGHT)
+    elseif st == :WAVN
+        return 1 / lambda_vac
+    else
+        return lambda  # fallback
+    end
+end
+
+"""
+    _grism_s_to_lambda(world_si, spec::GrismSpec) -> Float64
+
+Convert an S-type world coordinate to the grism equation's native wavelength.
+This is the inverse of `_grism_lambda_to_s`.
+"""
+function _grism_s_to_lambda(world_si, spec::GrismSpec)
+    T = _float_type(typeof(world_si))
+    st = spec.s_type
+    # Convert S-type to vacuum wavelength for the grism equation.
+    lambda_vac = if st == :WAVE
+        world_si  # already vacuum wavelength
+    elseif st == :AWAV
+        # S-type is air wavelength; for GRI we need vacuum.
+        spec.algorithm == :GRI ? _awav_to_wave(world_si) : world_si
+    elseif st == :FREQ
+        T(_C_LIGHT) / world_si
+    elseif st == :AFRQ
+        T(_C_LIGHT) / (world_si / T(2π))
+    elseif st == :ENER
+        T(_C_LIGHT) / (world_si / T(_H_PLANCK))
+    elseif st == :VELO
+        nu = _velo_to_freq(world_si, T(spec.restfrq))
+        T(_C_LIGHT) / nu
+    elseif st == :VRAD
+        nu = T(spec.restfrq) * (1 - world_si / T(_C_LIGHT))
+        T(_C_LIGHT) / nu
+    elseif st == :VOPT
+        T(spec.restwav) * (1 + world_si / T(_C_LIGHT))
+    elseif st == :ZOPT
+        T(spec.restwav) * (1 + world_si)
+    elseif st == :BETA
+        nu = _velo_to_freq(world_si * T(_C_LIGHT), T(spec.restfrq))
+        T(_C_LIGHT) / nu
+    elseif st == :WAVN
+        1 / world_si
+    else
+        world_si  # fallback
+    end
+    # For GRA + AWAV: the wavelength IS the air wavelength (already returned above).
+    # For GRA + non-AWAV: convert vacuum -> air for the grism equation.
+    if spec.algorithm == :GRA && st != :AWAV
+        return _wave_to_awav(lambda_vac)
+    end
+    return lambda_vac
 end
 
 # ── Inverse transform: world -> intermediate ──────────────────────────────────
@@ -194,8 +334,10 @@ Returns `NaN` if the world coordinate maps outside the valid grism domain
 """
 function _grism_world_to_x(world_si, spec::GrismSpec)
     T = _float_type(typeof(world_si))
-    # Step 1-2: lambda -> sin(gamma) -> gamma.
-    s = T(world_si) / T(spec.inv_denom) - T(spec.const_term)
+    # Step 1: convert S-type to wavelength.
+    lambda = _grism_s_to_lambda(T(world_si), spec)
+    # Step 2: lambda -> sin(gamma) -> gamma.
+    s = lambda / T(spec.inv_denom) - T(spec.const_term)
     abs(s) <= 1 || return T(NaN)
     gamma = asin(s)
     # Step 3: gamma -> Gamma.

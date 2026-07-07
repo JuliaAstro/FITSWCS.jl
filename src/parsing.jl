@@ -479,12 +479,18 @@ function _build_spectral_specs(ctype::Vector{String}, crval::Vector{Float64},
                                   get(header, "RESTFREQ$(alt_str)", NaN)))
             restwav = Float64(get(header, "RESTWAV$(alt_str)", NaN))
             # dlambda_ds: derivative of grism wavelength wrt S-type at reference.
-            # lambda_r = crval_si (already in SI meters).
-            # For GRA, the grism equation uses air wavelength; dlambda here is
-            # dlambda_air/dS, computed by chaining through vacuum wavelength.
-            dlambda_ds = _grism_dlambda_ds(crval_si, s_type, algorithm, restfrq, restwav)
+            # The grism equation needs the reference wavelength lambda_r
+            # in the grism-native type (vacuum for GRI, air for GRA).
+            lambda_r = _grism_reference_wavelength(crval_si, s_type, algorithm,
+                                                     restfrq, restwav)
+            # dlambda_ds: derivative of grism-native wavelength wrt S-type.
+            # _grism_dlambda_ds always starts from vacuum wavelength; pass the
+            # vacuum-equivalent lambda for its GRA conversion.
+            lambda_vac = algorithm == :GRA ? _awav_to_wave(lambda_r) : lambda_r
+            dlambda_ds = _grism_dlambda_ds(lambda_vac, s_type, algorithm, restfrq, restwav)
             pvs = [Float64(get(header, "PV$(i)_$(j)$(alt_str)", NaN)) for j in 0:6]
-            gspec = _grism_setup(i, crval_si, pvs, dlambda_ds, restfrq, restwav)
+            gspec = _grism_setup(i, lambda_r, pvs, dlambda_ds, restfrq, restwav,
+                                 s_type, algorithm)
             push!(grism_specs, gspec)
             continue
         end

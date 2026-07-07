@@ -328,7 +328,7 @@ let g = SUITE["pixel_to_world"]
     g["TAN/batch-1M/Float64"] = @benchmarkable pixel_to_world($WCS_TAN, $_batch_pix_1M) evals=2 samples=3
     g["TAN/batch-1M/Float32"] = @benchmarkable pixel_to_world($WCS_TAN, $(Float32.(_batch_pix_1M))) evals=2 samples=3
     g["3D-cube-TAB/batch-100"] = @benchmarkable pixel_to_world($WCS_CUBE_TAB, $_batch_pix_cube_tab) evals=1
-    g["grism/scalar"] = @benchmarkable pixel_to_world($WCS_GRISM, $_pix_grism) evals=100
+    g["grism/AWAV-GRA/scalar"] = @benchmarkable pixel_to_world($WCS_GRISM, $_pix_grism) evals=100
 end
 
 # ── world_to_pixel ───────────────────────────────────────────────────────────
@@ -349,7 +349,7 @@ let g = SUITE["world_to_pixel"]
     g["TAN/batch-1M/Float64"] = @benchmarkable world_to_pixel($WCS_TAN, $_batch_world_1M) evals=2 samples=3
     g["TAN/batch-1M/Float32"] = @benchmarkable world_to_pixel($WCS_TAN, $(Float32.(_batch_world_1M))) evals=2 samples=3
     g["3D-cube-TAB/batch-100"] = @benchmarkable world_to_pixel($WCS_CUBE_TAB, $_batch_world_cube_tab) evals=1
-    g["grism/scalar"] = @benchmarkable world_to_pixel($WCS_GRISM, $_world_grism) evals=100
+    g["grism/AWAV-GRA/scalar"] = @benchmarkable world_to_pixel($WCS_GRISM, $_world_grism) evals=100
 end
 
 # ── parsing ──────────────────────────────────────────────────────────────────
@@ -362,7 +362,7 @@ let g = SUITE["parsing"]
     g["WCS/3D-cube"] = @benchmarkable WCS($_hdr_cube) evals=1 samples=10
     g["WCS/3D-cube-TAB"] = @benchmarkable WCS($_hdr_cube_tab; fobj = $(BenchmarkTabularFobj())) evals=5 samples=3
     g["WCS/3D-cube-spec"] = @benchmarkable WCS($_hdr_cube_spec) evals=5 samples=3
-    g["WCS/grism"] = @benchmarkable WCS($_hdr_grism) evals=5 samples=3
+    g["WCS/grism/AWAV-GRA"] = @benchmarkable WCS($_hdr_grism) evals=5 samples=3
 end
 
 
