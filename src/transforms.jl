@@ -53,19 +53,23 @@ end
 @inline _tabular_data(aux::AuxiliaryWCSData) = aux.tabular
 @inline _spectral_data(::NoAuxiliaryWCSData) = NoSpectralWCSData()
 @inline _spectral_data(aux::AuxiliaryWCSData) = aux.spectral
+@inline _grism_data(::NoAuxiliaryWCSData) = NoGrismWCSData()
+@inline _grism_data(aux::AuxiliaryWCSData) = aux.grism
 
 function intermediate_to_tabular_world(::NoTabularWCSData, wcs::WCSTransform{N}, intermediate::AbstractVector, ::Type{T}) where {N, T <: AbstractFloat}
     spectral_data = _spectral_data(wcs.aux)
-    if spectral_data isa NoSpectralWCSData
-        # Fast path: no TAB, no spectral — just add CRVAL.
+    grism_data = _grism_data(wcs.aux)
+    if spectral_data isa NoSpectralWCSData && grism_data isa NoGrismWCSData
+        # Fast path: no TAB, no spectral, no grism -- just add CRVAL.
         return SVector{N, T}(ntuple(i -> T(wcs.crval[i]) + T(intermediate[i]), N))
     end
-    # Build a mutable world vector, apply spectral conversion, then freeze.
+    # Build a mutable world vector, apply spectral/grism conversion, then freeze.
     world = MVector{N, T}(undef)
     @inbounds for i in 1:N
         world[i] = T(wcs.crval[i]) + T(intermediate[i])
     end
     _apply_spectral_forward!(spectral_data, world, intermediate, T)
+    _apply_grism_forward!(grism_data, world, intermediate, T)
     return SVector{N, T}(world)
 end
 
@@ -79,6 +83,7 @@ function intermediate_to_tabular_world(tabular::TabularWCSData, wcs::WCSTransfor
     # Apply spectral conversion before TAB so that TAB axes (which are
     # never also spectral) overwrite the linear baseline correctly.
     _apply_spectral_forward!(_spectral_data(wcs.aux), world, intermediate, T)
+    _apply_grism_forward!(_grism_data(wcs.aux), world, intermediate, T)
     @inbounds for i in eachindex(tabular.tables)
         table = tabular.tables[i]
         values = _tabular_forward(table, intermediate, wcs.crval)
@@ -93,8 +98,9 @@ end
 
 function tabular_world_to_intermediate(::NoTabularWCSData, wcs::WCSTransform{N}, world::AbstractVector, ::Type{T}) where {N, T <: AbstractFloat}
     spectral_data = _spectral_data(wcs.aux)
-    if spectral_data isa NoSpectralWCSData
-        # Fast path: no TAB, no spectral — just subtract CRVAL.
+    grism_data = _grism_data(wcs.aux)
+    if spectral_data isa NoSpectralWCSData && grism_data isa NoGrismWCSData
+        # Fast path: no TAB, no spectral, no grism -- just subtract CRVAL.
         return SVector{N, T}(ntuple(i -> T(world[i]) - T(wcs.crval[i]), N))
     end
     intermediate = MVector{N, T}(undef)
@@ -102,6 +108,7 @@ function tabular_world_to_intermediate(::NoTabularWCSData, wcs::WCSTransform{N},
         intermediate[i] = T(world[i]) - T(wcs.crval[i])
     end
     _apply_spectral_inverse!(spectral_data, intermediate, world, T)
+    _apply_grism_inverse!(grism_data, intermediate, world, T)
     return SVector{N, T}(intermediate)
 end
 
@@ -112,8 +119,9 @@ function tabular_world_to_intermediate(tabular::TabularWCSData, wcs::WCSTransfor
     @inbounds for i in 1:N
         intermediate[i] = T(world[i]) - T(wcs.crval[i])
     end
-    # Apply spectral inverse before TAB.
+    # Apply spectral/grism inverse before TAB.
     _apply_spectral_inverse!(_spectral_data(wcs.aux), intermediate, world, T)
+    _apply_grism_inverse!(_grism_data(wcs.aux), intermediate, world, T)
     @inbounds for i in eachindex(tabular.tables)
         table = tabular.tables[i]
         values = _tabular_inverse(table, world, wcs.crval)
@@ -148,6 +156,30 @@ function _apply_spectral_inverse!(spec::SpectralWCSData, intermediate, world, ::
     @inbounds for s in spec.specs
         _is_linear(s) && continue
         intermediate[s.axis] = T(_spectral_world_to_x(T(world[s.axis]), s))
+    end
+    return intermediate
+end
+
+# ── Grism pipeline helpers ────────────────────────────────────────────────────
+
+function _apply_grism_forward!(::NoGrismWCSData, world, intermediate, ::Type{T}) where {T}
+    return world  # no grism axes -- zero overhead
+end
+
+function _apply_grism_forward!(grism::GrismWCSData, world, intermediate, ::Type{T}) where {T}
+    @inbounds for g in grism.specs
+        world[g.axis] = T(_grism_x_to_world(T(intermediate[g.axis]), g))
+    end
+    return world
+end
+
+function _apply_grism_inverse!(::NoGrismWCSData, intermediate, world, ::Type{T}) where {T}
+    return intermediate  # no grism axes -- zero overhead
+end
+
+function _apply_grism_inverse!(grism::GrismWCSData, intermediate, world, ::Type{T}) where {T}
+    @inbounds for g in grism.specs
+        intermediate[g.axis] = T(_grism_world_to_x(T(world[g.axis]), g))
     end
     return intermediate
 end

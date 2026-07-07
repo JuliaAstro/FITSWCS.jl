@@ -93,6 +93,8 @@ const _ALGORITHM_MAP = Dict{String, Tuple{Symbol, Symbol, Symbol}}(
     "F2A" => (:F, :A, :F2A),  "A2F" => (:A, :F, :A2F),
     "W2A" => (:W, :A, :W2A),  "A2W" => (:A, :W, :A2W),
     "V2A" => (:V, :A, :V2A),  "A2V" => (:A, :V, :A2V),
+    "GRI" => (:W, :W, :GRI),  # grism vacuum: X=lambda, P=lambda
+    "GRA" => (:A, :W, :GRA),  # grism air: X=lambda_air, P=lambda_vac
 )
 
 # ── CDELT scaling: dX/dS derivatives ─────────────────────────────────────────

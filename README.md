@@ -105,6 +105,11 @@ All FITS Paper III spectral types and algorithms are supported:
 | `AWAV` | Air wavelength | linear, `-A2F`, `-A2W`, `-A2V` |
 | `AFRQ`, `ENER`, `WAVN` | Angular frequency, energy, wavenumber | linear |
 | `VRAD`, `VOPT`, `ZOPT`, `BETA` | Derived velocity/redshift types | linear |
+| Any wavelength type | As above | `-GRI` (grism in vacuum), `-GRA` (grism in air) |
+
+Grism coordinates use the ideal disperser equation (grating interference +
+prism refraction) from Paper III Section 5.  Seven PV parameters
+(`PVi_0`–`PVi_6`) specify the disperser properties.
 
 Air-wavelength conversions use the IUGG 1999 / Ciddor (1996) refractive-index
 relation (Paper III eq. 4). Note that the WCSLIB code diverges from the published
@@ -202,7 +207,6 @@ wcs = WCS(fits[1]; fobj = fits)
   `SSYSOBS`, `VELOSYS`, `ZSOURCE`, `SSYSSRC`, `MJD-AVG`, `OBSGEO-X/Y/Z`)
   is not implemented; the keywords are parsed and stored for downstream
   use or a future package-level correction step.
-- **Grism** algorithm codes `GRI`/`GRA` are not yet implemented.
 - **Stokes axes**: transform linearly but carry no physical interpretation
   (polarization state).
 
