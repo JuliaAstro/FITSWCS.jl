@@ -6,7 +6,7 @@ These names mirror common WCS.jl workflows, but keep FITSWCS.jl's FITS
 """
 
 """
-    WCSTransform(naxis; kwds...) -> WCSTransform
+    WCSTransform(naxis; preserve_units::Bool = false, kwds...) -> WCSTransform
 
 Construct a transform from WCS.jl-style keyword vectors and matrices.
 
@@ -14,7 +14,7 @@ Supported keywords are `crpix`, `crval`, `cdelt`, `ctype`, `cunit`, `pc`, `cd`,
 `crota`, `lonpole`, and `latpole`.  More specialized wcslib fields remain
 unsupported in this pure-Julia constructor.
 """
-function WCSTransform(naxis::Integer; kwds...)
+function WCSTransform(naxis::Integer; preserve_units::Bool = false, kwds...)
     naxis >= 1 || throw(ArgumentError("naxis must be >= 1, got $naxis"))
 
     # Translate the supported property-style inputs into ordinary FITS keys.
@@ -24,7 +24,7 @@ function WCSTransform(naxis::Integer; kwds...)
     end
 
     # Reuse the main parser so validation and projection setup stay centralized.
-    return WCS(header)
+    return WCS(header; preserve_units = preserve_units)
 end
 
 function _constructor_keyword_to_header!(header::Dict{String,Any},

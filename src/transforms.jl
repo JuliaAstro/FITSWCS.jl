@@ -16,15 +16,23 @@ All pixel coordinates use the **FITS 1-based** convention:
 This matches Julia's 1-based array indexing, so no offset is needed when
 working with Julia arrays.
 
-## Celestial coordinate convention
+## World coordinate convention
 
-For axes with CTYPE codes `RA---*` / `DEC--*` (or galactic, ecliptic
-equivalents), the world coordinates are in **degrees**.  The output vector
-element at `lon_axis` is the right ascension (or longitude) and at `lat_axis`
-is the declination (or latitude).
+Return values from `pixel_to_world` and expected input values to
+`world_to_pixel` follow these rules:
 
-For purely linear axes the world coordinates are in whatever units the FITS
-header specifies via `CDELT` and `CRVAL`.
+- **Celestial axes** (RA/DEC, GLON/GLAT, etc.): **degrees**.
+- **Spectral axes** (FREQ, WAVE, VELO, ENER, AWAV, etc.): **SI units**
+  (Hz, m, m/s, J, rad/s, or dimensionless for ZOPT/BETA).
+- **Other linear axes**: whatever units the CD matrix encodes (typically the
+  header's original CUNIT).
+
+When `preserve_units=true` was set at construction, the values are scaled
+back to the original header CUNIT for celestial and spectral axes.  See
+`WCS()` for details.
+
+The output vector element at `lon_axis` is right ascension/longitude and at
+`lat_axis` is declination/latitude.
 """
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -187,10 +195,10 @@ function pixel_to_world(wcs::WCSTransform, pixel::AbstractVector)
         x_lon = x[lon_idx]   # degrees
         x_lat = x[lat_idx]   # degrees
 
-        # Deproject: (x, y) → (φ, θ) in radians
+        # Deproject: (x, y) -> (phi, theta) in radians
         phi, theta = intermediate_to_native(wcs.projection, x_lon, x_lat)
 
-        # Spherical rotation: (φ, θ) → (α, δ) in radians
+        # Spherical rotation: (phi, theta) -> (alpha, delta) in radians
         # alpha_p, delta_p are the celestial coords of the native north pole.
         alpha_p = deg2rad(T(wcs.alpha_p))
         delta_p = deg2rad(T(wcs.delta_p))
@@ -200,11 +208,18 @@ function pixel_to_world(wcs::WCSTransform, pixel::AbstractVector)
         # Build world vector: start from the intermediate coords, then overwrite
         # the celestial axes with the spherical-rotation results.
         world = intermediate_to_tabular_world(_tabular_data(wcs.aux), wcs, x, T)
-        return _set_celestial_axes!(world, lon_idx, lat_idx, mod(rad2deg(alpha), 360), rad2deg(delta))
+        world = _set_celestial_axes!(world, lon_idx, lat_idx, mod(rad2deg(alpha), 360), rad2deg(delta))
     else
         # Purely linear: world = CRVAL + CD*(pixel - CRPIX)
-        return intermediate_to_tabular_world(_tabular_data(wcs.aux), wcs, x, T)
+        world = intermediate_to_tabular_world(_tabular_data(wcs.aux), wcs, x, T)
     end
+    # Scale world coordinates back to CUNIT if preserve_units is set.
+    # Convert unit_scaling to the world's element type so the broadcast
+    # preserves type stability (Float32 in, Float32 out).
+    if wcs.preserve_units
+        return world ./ T.(wcs.unit_scaling)
+    end
+    return world
 end
 
 # Convenience: accept tuples and static-array-likes
@@ -222,10 +237,17 @@ Returns a length-`wcs.naxis` floating-point vector of 1-based pixel coordinates.
 Tuple inputs and scalar varargs are materialized as static coordinates and return
 `SVector` results.
 """
-function world_to_pixel(wcs::WCSTransform, world::AbstractVector)
+function world_to_pixel(wcs::WCSTransform{N}, world::AbstractVector) where {N}
     length(world) == wcs.naxis ||
         throw(DimensionMismatch("world has length $(length(world)), expected $(wcs.naxis)"))
     T = _coordinate_float_type(world)
+
+    # Scale world from CUNIT to canonical units if preserve_units is set.
+    world_canon = if wcs.preserve_units
+        SVector{N, T}(world) .* T.(wcs.unit_scaling)
+    else
+        SVector{N,T}(world)
+    end
 
     if wcs.projection !== nothing
         lon_idx = wcs.lon_axis
@@ -233,9 +255,10 @@ function world_to_pixel(wcs::WCSTransform, world::AbstractVector)
 
         # The fiducial celestial point is defined to have zero intermediate
         # coordinates; handling it directly avoids pole cancellation.
-        lon_delta = mod(world[lon_idx] - T(wcs.crval[lon_idx]) + 180, 360) - 180
-        if abs(lon_delta) <= T(1e-10) && abs(world[lat_idx] - T(wcs.crval[lat_idx])) <= T(1e-10)
-            x = tabular_world_to_intermediate(_tabular_data(wcs.aux), wcs, world, T)
+        btol = _boundary_tol(T)
+        lon_delta = mod(world_canon[lon_idx] - T(wcs.crval[lon_idx]) + 180, 360) - 180
+        if abs(lon_delta) <= btol && abs(world_canon[lat_idx] - T(wcs.crval[lat_idx])) <= btol
+            x = tabular_world_to_intermediate(_tabular_data(wcs.aux), wcs, world_canon, T)
             x = _set_celestial_axes!(x, lon_idx, lat_idx, zero(T), zero(T))
             return intermediate_to_pixel(wcs, x)
         end
@@ -244,23 +267,23 @@ function world_to_pixel(wcs::WCSTransform, world::AbstractVector)
         delta_p = deg2rad(T(wcs.delta_p))
         phi_p = deg2rad(T(wcs.lonpole))
 
-        alpha = deg2rad(T(world[lon_idx]))
-        delta = deg2rad(T(world[lat_idx]))
+        alpha = deg2rad(T(world_canon[lon_idx]))
+        delta = deg2rad(T(world_canon[lat_idx]))
 
-        # Spherical rotation: (α, δ) → (φ, θ)
+        # Spherical rotation: (alpha, delta) -> (phi, theta)
         phi, theta = celestial_to_native(alpha, delta, alpha_p, delta_p, phi_p)
 
-        # Re-project: (φ, θ) → (x, y) in degrees
+        # Re-project: (phi, theta) -> (x, y) in degrees
         x_lon, x_lat = native_to_intermediate(wcs.projection, phi, theta)
 
         # Build intermediate coordinate vector
         # Non-celestial axes: x_i = world_i - crval_i (trivial linear axes)
-        x = tabular_world_to_intermediate(_tabular_data(wcs.aux), wcs, world, T)
+        x = tabular_world_to_intermediate(_tabular_data(wcs.aux), wcs, world_canon, T)
         x = _set_celestial_axes!(x, lon_idx, lat_idx, T(x_lon), T(x_lat))
 
         return intermediate_to_pixel(wcs, x)
     else
-        x = tabular_world_to_intermediate(_tabular_data(wcs.aux), wcs, world, T)
+        x = tabular_world_to_intermediate(_tabular_data(wcs.aux), wcs, world_canon, T)
         return intermediate_to_pixel(wcs, x)
     end
 end
@@ -392,24 +415,29 @@ function pixel_to_world(wcs::WCSTransform, pixels::AbstractMatrix)
 
     if isnothing(wcs.projection)
         # Purely linear WCS only needs CRVAL added to each output axis.
-        return _intermediate_to_world_batch(wcs, intermediate, T)
+        world = _intermediate_to_world_batch(wcs, intermediate, T)
+    else
+        lon_idx = wcs.lon_axis
+        lat_idx = wcs.lat_axis
+        alpha_p = deg2rad(T(wcs.alpha_p))
+        delta_p = deg2rad(T(wcs.delta_p))
+        phi_p = deg2rad(T(wcs.lonpole))
+
+        # Preserve non-celestial axes, then overwrite celestial axes after projection.
+        world = _intermediate_to_world_batch(wcs, copy(intermediate), T)
+        for k in 1:N
+            phi, theta = intermediate_to_native(wcs.projection, intermediate[lon_idx, k], intermediate[lat_idx, k])
+            alpha, delta = native_to_celestial(phi, theta, alpha_p, delta_p, phi_p)
+            world[lon_idx, k] = mod(rad2deg(alpha), 360)
+            world[lat_idx, k] = rad2deg(delta)
+        end
     end
-
-    lon_idx = wcs.lon_axis
-    lat_idx = wcs.lat_axis
-    d2r = deg2rad(one(T))
-    r2d = inv(d2r)
-    alpha_p = T(wcs.alpha_p) * d2r
-    delta_p = T(wcs.delta_p) * d2r
-    phi_p = T(wcs.lonpole) * d2r
-
-    # Preserve non-celestial axes, then overwrite celestial axes after projection.
-    world = _intermediate_to_world_batch(wcs, copy(intermediate), T)
-    for k in 1:N
-        phi, theta = intermediate_to_native(wcs.projection, intermediate[lon_idx, k], intermediate[lat_idx, k])
-        alpha, delta = native_to_celestial(phi, theta, alpha_p, delta_p, phi_p)
-        world[lon_idx, k] = mod(alpha * r2d, T(360))
-        world[lat_idx, k] = delta * r2d
+    # Scale world coordinates back to CUNIT if preserve_units is set.
+    # Convert unit_scaling to the world's element type for type stability.
+    if wcs.preserve_units
+        for i in 1:wcs.naxis
+            world[i, :] ./= T(wcs.unit_scaling[i])
+        end
     end
     return world
 end
@@ -440,38 +468,49 @@ function world_to_pixel(wcs::WCSTransform, worlds::AbstractMatrix)
         throw(DimensionMismatch("worlds has $(naxis) rows, expected $(wcs.naxis)"))
     T = _float_type(eltype(worlds))
 
+    # Scale world coordinates from CUNIT to canonical if preserve_units is set.
+    worlds_canon = if wcs.preserve_units
+        ws = similar(worlds, T, naxis, N)
+        for i in 1:naxis
+            ws[i, :] .= worlds[i, :] .* T(wcs.unit_scaling[i])
+        end
+        ws
+    else
+        worlds
+    end
+
     if wcs.projection === nothing
         if has_distortion(wcs.pipeline)
             # Distorted linear WCS still needs the per-coordinate inverse pipeline.
-            intermediate = _world_to_intermediate_batch(wcs, worlds, T)
+            intermediate = _world_to_intermediate_batch(wcs, worlds_canon, T)
             return _intermediate_to_pixel_batch(wcs, intermediate, T)
         end
 
         # Purely linear, undistorted WCS can solve all world coordinates directly.
         has_tabular(_tabular_data(wcs.aux)) &&
-            return _intermediate_to_pixel_batch(wcs, _world_to_intermediate_batch(wcs, worlds, T), T)
-        return _linear_world_to_pixel_batch(wcs, worlds, T)
+            return _intermediate_to_pixel_batch(wcs, _world_to_intermediate_batch(wcs, worlds_canon, T), T)
+        return _linear_world_to_pixel_batch(wcs, worlds_canon, T)
     end
 
     # Start from linear world offsets; celestial axes may be overwritten below.
-    intermediate = _world_to_intermediate_batch(wcs, worlds, T)
+    intermediate = _world_to_intermediate_batch(wcs, worlds_canon, T)
 
     lon_idx = wcs.lon_axis
     lat_idx = wcs.lat_axis
-    d2r = deg2rad(one(T))
-    alpha_p = T(wcs.alpha_p) * d2r
-    delta_p = T(wcs.delta_p) * d2r
-    phi_p = T(wcs.lonpole) * d2r
+    btol = _boundary_tol(T)
+    alpha_p = deg2rad(T(wcs.alpha_p))
+    delta_p = deg2rad(T(wcs.delta_p))
+    phi_p = deg2rad(T(wcs.lonpole))
 
     # Convert each celestial coordinate back to projection-plane coordinates.
     for k in 1:N
-        lon_delta = mod(T(worlds[lon_idx, k]) - T(wcs.crval[lon_idx]) + T(180), T(360)) - T(180)
-        if abs(lon_delta) <= T(1e-10) && abs(T(worlds[lat_idx, k]) - T(wcs.crval[lat_idx])) <= T(1e-10)
+        lon_delta = mod(T(worlds_canon[lon_idx, k]) - T(wcs.crval[lon_idx]) + T(180), T(360)) - T(180)
+        if abs(lon_delta) <= btol && abs(T(worlds_canon[lat_idx, k]) - T(wcs.crval[lat_idx])) <= btol
             intermediate[lon_idx, k] = zero(T)
             intermediate[lat_idx, k] = zero(T)
         else
-            alpha = T(worlds[lon_idx, k]) * d2r
-            delta = T(worlds[lat_idx, k]) * d2r
+            alpha = deg2rad(T(worlds_canon[lon_idx, k]))
+            delta = deg2rad(T(worlds_canon[lat_idx, k]))
             phi, theta = celestial_to_native(alpha, delta, alpha_p, delta_p, phi_p)
             x_lon, x_lat = native_to_intermediate(wcs.projection, phi, theta)
             intermediate[lon_idx, k] = T(x_lon)
