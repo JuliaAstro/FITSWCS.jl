@@ -486,30 +486,6 @@ end
         @test_throws ArgumentError WCS(bad_axis_hdr)
     end
 
-    @testset "Error: non-linear spectral algorithms are explicitly unsupported" begin
-        # Paper III algorithms LOG and F2W are now implemented.
-        # GRI/GRA grism codes remain unsupported.
-        hdr_grism = Dict(
-            "NAXIS"  => 1,
-            "CTYPE1" => "FREQ-GRI",
-            "CRPIX1" => 1.0,
-            "CRVAL1" => 1.0e9,
-            "CDELT1" => 1.0e6,
-        )
-        @test_throws ArgumentError WCS(hdr_grism)
-
-        alt_hdr = Dict(
-            "NAXIS"   => 1,
-            "CTYPE1"  => "FREQ",
-            "CTYPE1A" => "FREQ-GRI",
-            "CRPIX1A" => 1.0,
-            "CRVAL1A" => 500.0,
-            "CDELT1A" => 1.0,
-        )
-        @test pixel_to_world(WCS(alt_hdr), [2.0]) ≈ [2.0]
-        @test_throws ArgumentError WCS(alt_hdr; alt='A')
-    end
-
     @testset "Celestial units are converted without changing linear axes" begin
         # The public celestial API uses degrees while unrelated axes keep header units.
         hdr = Dict(
@@ -1295,9 +1271,30 @@ end
     @test !isfinite(world_to_pixel(wcs_cube,
                    SVector{3,Float64}(83.8221,-5.3911,0.0))[3])
 
-    # ── Unsupported algorithm code ────────────────────────────────────────────
-    @test_throws ArgumentError WCS(Dict("NAXIS"=>1,"CTYPE1"=>"FREQ-GRI",
+    # ── Unsupported algorithm code ─────────────────────────────────────
+    @test_throws ArgumentError WCS(Dict("NAXIS"=>1,"CTYPE1"=>"FREQ-XXX",
         "CRPIX1"=>1.0,"CRVAL1"=>1.0,"CDELT1"=>1.0))
+
+    # ── Grism (GRI/GRA): Paper III KPNO Coudé Feed example ───────────────────
+    # AWAV-GRA with known grating parameters; linear in grism parameter.
+    wcs_grism = WCS(Dict("NAXIS"=>1,"CTYPE1"=>"AWAV-GRA",
+        "CRPIX1"=>1801.7,"CRVAL1"=>5225.2,"CDELT1"=>-0.4334,
+        "CUNIT1"=>"Angstrom",
+        "PV1_0"=>3.16e5,"PV1_1"=>1.0,"PV1_2"=>13.9))
+    # At reference pixel, world = reference wavelength in SI (meters).
+    world_ref = pixel_to_world(wcs_grism, [1801.7])
+    @test world_ref[1] ≈ 5.2252e-7  # 5225.2 Angstrom in meters
+    # Round-trip at reference pixel.
+    @test world_to_pixel(wcs_grism, SVector{1,Float64}(world_ref[1])) ≈ [1801.7] atol=1e-6
+    # Off-reference round-trip.
+    w2 = pixel_to_world(wcs_grism, [2000.0])
+    @test world_to_pixel(wcs_grism, w2) ≈ [2000.0] atol=1e-6
+    # preserve_units=true: output in Angstrom.
+    wcs_grism_pu = WCS(Dict("NAXIS"=>1,"CTYPE1"=>"AWAV-GRA",
+        "CRPIX1"=>1801.7,"CRVAL1"=>5225.2,"CDELT1"=>-0.4334,
+        "CUNIT1"=>"Angstrom",
+        "PV1_0"=>3.16e5,"PV1_1"=>1.0,"PV1_2"=>13.9), preserve_units=true)
+    @test pixel_to_world(wcs_grism_pu, [1801.7])[1] ≈ 5225.2 atol=1e-6
 end
 
 # ──────────────────────────────────────────────────────────────────────────────

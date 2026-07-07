@@ -442,16 +442,17 @@ function _build_spectral_specs(ctype::Vector{String}, crval::Vector{Float64},
                                 cunit::Vector{String}, header::AbstractDict,
                                 alt_str::AbstractString, naxis::Int)
     specs = SpectralSpec[]
+    grism_specs = GrismSpec[]
     for i in 1:naxis
         coord_part, coord_type, algo_code = parse_ctype(ctype[i])
         coord_type == :spectral || continue
-        # Skip TAB axes — handled by the tabular path.
+        # Skip TAB axes -- handled by the tabular path.
         algo_code == "TAB" && continue
 
         s_type = _STYPE_STR[coord_part]
         s_p_type = _S_TO_P[s_type]   # parent type from S-type (for LINEAR/LOG)
 
-        # Resolve algorithm: blank → linear with X ≡ P ≡ S-type parent.
+        # Resolve algorithm: blank -> linear with X == P == S-type parent.
         if isempty(algo_code) || algo_code == "---"
             x_type = s_p_type
             p_type = s_p_type
@@ -472,9 +473,25 @@ function _build_spectral_specs(ctype::Vector{String}, crval::Vector{Float64},
         # in WCS() before _build_spectral_specs is called.
         crval_si = crval[i]
 
+        # Grism axes: parse PV parameters, compute dlambda/dS, build GrismSpec.
+        if algorithm == :GRI || algorithm == :GRA
+            restfrq = Float64(get(header, "RESTFRQ$(alt_str)",
+                                  get(header, "RESTFREQ$(alt_str)", NaN)))
+            restwav = Float64(get(header, "RESTWAV$(alt_str)", NaN))
+            # dlambda_ds: derivative of grism wavelength wrt S-type at reference.
+            # lambda_r = crval_si (already in SI meters).
+            # For GRA, the grism equation uses air wavelength; dlambda here is
+            # dlambda_air/dS, computed by chaining through vacuum wavelength.
+            dlambda_ds = _grism_dlambda_ds(crval_si, s_type, algorithm, restfrq, restwav)
+            pvs = [Float64(get(header, "PV$(i)_$(j)$(alt_str)", NaN)) for j in 0:6]
+            gspec = _grism_setup(i, crval_si, pvs, dlambda_ds, restfrq, restwav)
+            push!(grism_specs, gspec)
+            continue
+        end
+
         # Rest frequency / wavelength (always in SI: Hz and m).
         restfrq = Float64(get(header, "RESTFRQ$(alt_str)",
-                               get(header, "RESTFREQ$(alt_str)", NaN)))
+                              get(header, "RESTFREQ$(alt_str)", NaN)))
         restwav = Float64(get(header, "RESTWAV$(alt_str)", NaN))
 
         # Reference-frame keywords.
@@ -506,8 +523,11 @@ function _build_spectral_specs(ctype::Vector{String}, crval::Vector{Float64},
             push!(specs, spec)
         end
     end
-    return isempty(specs) ? NoSpectralWCSData() :
-           SpectralWCSData(ntuple(i -> specs[i], length(specs)))
+    spectral_data = isempty(specs) ? NoSpectralWCSData() :
+                    SpectralWCSData(ntuple(i -> specs[i], length(specs)))
+    grism_data = isempty(grism_specs) ? NoGrismWCSData() :
+                    GrismWCSData(ntuple(i -> grism_specs[i], length(grism_specs)))
+    return spectral_data, grism_data
 end
 
 function _merge_spectral_aux(aux::NoAuxiliaryWCSData, spectral::NoSpectralWCSData)
@@ -519,7 +539,21 @@ end
 function _merge_spectral_aux(aux::AuxiliaryWCSData, spectral::AbstractSpectralWCSData)
     return AuxiliaryWCSData(det2im = aux.det2im, cpdis = aux.cpdis,
                             tabular = aux.tabular, spectral = spectral,
-                            time = aux.time)
+                            time = aux.time, grism = aux.grism)
+end
+
+# ── Grism spec merge ──────────────────────────────────────────────────────────
+
+function _merge_grism_aux(aux::NoAuxiliaryWCSData, grism::NoGrismWCSData)
+    return aux
+end
+function _merge_grism_aux(aux::NoAuxiliaryWCSData, grism::GrismWCSData)
+    return AuxiliaryWCSData(grism = grism)
+end
+function _merge_grism_aux(aux::AuxiliaryWCSData, grism::AbstractGrismWCSData)
+    return AuxiliaryWCSData(det2im = aux.det2im, cpdis = aux.cpdis,
+                            tabular = aux.tabular, spectral = aux.spectral,
+                            time = aux.time, grism = grism)
 end
 
 # ── Time axis spec construction ────────────────────────────────────────────────
@@ -553,7 +587,7 @@ end
 function _merge_time_aux(aux::AuxiliaryWCSData, time::AbstractTimeWCSData)
     return AuxiliaryWCSData(det2im = aux.det2im, cpdis = aux.cpdis,
                             tabular = aux.tabular, spectral = aux.spectral,
-                            time = time)
+                            time = time, grism = aux.grism)
 end
 
 function _build_observation_spec(header::AbstractDict, alt_str::AbstractString)
@@ -943,8 +977,9 @@ function WCS(header::AbstractDict; fobj = nothing, alt::Char = ' ', minerr::Real
     # ── Build spectral-axis specifications ────────────────────────────────────
     # crval[i] is already in SI for spectral axes at this point, so
     # _build_spectral_specs does not need to apply _unit_to_si itself.
-    spectral = _build_spectral_specs(ctype, crval, cunit, header, alt_str, naxis)
+    spectral, grism = _build_spectral_specs(ctype, crval, cunit, header, alt_str, naxis)
     aux = _merge_spectral_aux(aux, spectral)
+    aux = _merge_grism_aux(aux, grism)
 
     # ── Build time-axis specifications ────────────────────────────────────────
     time = _build_time_specs(ctype, naxis, header, alt_str)
@@ -967,6 +1002,14 @@ function WCS(header::AbstractDict; fobj = nothing, alt::Char = ' ', minerr::Real
         for s in spectral.specs
             for row in 1:naxis
                 cd[row, s.axis] *= s.cdelt_scale
+            end
+        end
+    end
+    # Apply cdelt_scale for grism axes (separate from spectral specs).
+    if grism isa GrismWCSData
+        for g in grism.specs
+            for row in 1:naxis
+                cd[row, g.axis] *= g.cdelt_scale
             end
         end
     end
