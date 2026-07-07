@@ -1227,6 +1227,54 @@ end
     bw2 = world_to_pixel(wcs_cube, SVector{3,Float64}(fw2...))
     @test bw2 ≈ [512.0,512.0,2.0]  atol=1e-7
 
+    # ── 3D cube: RA---TAN DEC--TAN + TIME (days) ──────────────────────────────
+    # CUNIT3='d': 100 days -> 8.64e6 s, cdelt=1 d/px -> 86400 s/px.
+    wcs_ctime = WCS(Dict(
+        "NAXIS"=>3, "CTYPE1"=>"RA---TAN","CTYPE2"=>"DEC--TAN","CTYPE3"=>"TIME",
+        "CRPIX1"=>512.0,"CRPIX2"=>512.0,"CRPIX3"=>1.0,
+        "CRVAL1"=>83.8221,"CRVAL2"=>-5.3911,"CRVAL3"=>100.0,
+        "CD1_1"=>-2.7778e-4,"CD1_2"=>5.5556e-5,"CD1_3"=>0.0,
+        "CD2_1"=>5.5556e-5,"CD2_2"=>2.7778e-4,"CD2_3"=>0.0,
+        "CD3_1"=>0.0,"CD3_2"=>0.0,"CD3_3"=>1.0,
+        "CUNIT3"=>"d","LONPOLE"=>180.0,
+        "MJDREF"=>59000.0,"TIMESYS"=>"UTC",
+    ))
+    crval_s = 100.0 * 86400.0  # 100 d -> 8.64e6 s
+    # Canonical: time axis returns seconds.
+    world_ref = pixel_to_world(wcs_ctime, [512.0,512.0,1.0])
+    @test world_ref ≈ [83.8221, -5.3911, crval_s]
+    # One pixel offset in time: 1 d -> 86400 s.
+    world_dt = pixel_to_world(wcs_ctime, [512.0,512.0,2.0])
+    @test world_dt[3] ≈ crval_s + 86400.0
+    @test world_dt[1:2] ≈ [83.8221, -5.3911]  atol=1e-8
+    # Round-trip.
+    bw_ct = world_to_pixel(wcs_ctime, SVector{3,Float64}(world_dt...))
+    @test bw_ct ≈ [512.0,512.0,2.0]  atol=1e-7
+    # preserve_units=true: time axis returns days.
+    wcs_ctime_pu = WCS(Dict(
+        "NAXIS"=>3, "CTYPE1"=>"RA---TAN","CTYPE2"=>"DEC--TAN","CTYPE3"=>"TIME",
+        "CRPIX1"=>512.0,"CRPIX2"=>512.0,"CRPIX3"=>1.0,
+        "CRVAL1"=>83.8221,"CRVAL2"=>-5.3911,"CRVAL3"=>100.0,
+        "CD1_1"=>-2.7778e-4,"CD1_2"=>5.5556e-5,"CD1_3"=>0.0,
+        "CD2_1"=>5.5556e-5,"CD2_2"=>2.7778e-4,"CD2_3"=>0.0,
+        "CD3_1"=>0.0,"CD3_2"=>0.0,"CD3_3"=>1.0,
+        "CUNIT3"=>"d","LONPOLE"=>180.0,
+        "MJDREF"=>59000.0,"TIMESYS"=>"UTC",
+    ), preserve_units=true)
+    world_pu = pixel_to_world(wcs_ctime_pu, [512.0,512.0,1.0])
+    @test world_pu[3] ≈ 100.0   # days, not seconds
+    @test world_pu[1] ≈ 83.8221
+    # Round-trip in preserve_units mode.
+    bw_pu = world_to_pixel(wcs_ctime_pu, SVector{3,Float64}(83.8221, -5.3911, 101.0))
+    @test bw_pu ≈ [512.0,512.0,2.0]  atol=1e-7
+    # Metadata.
+    time_spec = wcs_ctime.aux.time.specs[1]
+    @test time_spec.axis == 3
+    @test time_spec.mjdref ≈ 59000.0
+    @test time_spec.timesys == "UTC"
+    @test time_spec.trefpos == ""
+    @test time_spec.trefdir == ""
+
     # ── Air-wavelength types ─────────────────────────────────────────────────
     # AWAV linear with non-SI CUNIT: normalised to SI (m).
     # 5000 Angstrom -> 5e-7 m, cdelt=10 A/px -> 1e-9 m/px

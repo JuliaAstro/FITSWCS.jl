@@ -1,13 +1,15 @@
 # FITSWCS.jl
 
 FITSWCS.jl is a pure-Julia implementation of core FITS World Coordinate System
-transforms.  It is intentionally dictionary-first: the main parser works with
-FITS-like header dictionaries, while FITSIO.jl and FITSFiles.jl inputs are
-adapted through package extensions.
+transforms. The main public interface for constructing WCS objects is `WCS`
+which accepts dictionary input and returns a `WCSTransform`.
+Other types (e.g., those from FITSIO.jl and FITSFiles.jl)
+are parsed to dictionaries and then parsed to `WCSTransform` in extensions.
 
 This package is still under active development.  It currently focuses on
-correct, maintainable coverage of common image WCS cases rather than full
-wcslib parity.
+the published FITS WCS standard, though we are interested in contributions to
+support non-standard FITS WCS features. Our implementations seek to optimize
+scalar-path performance (allocation free `pixel_to_world` and `world_to_pixel`).
 
 ## Quick Start
 
@@ -30,17 +32,8 @@ pixel = world_to_pixel(wcs, world)
 
 Pixel coordinates use the FITS WCS convention: pixel `1` is the center of the
 first pixel.  Coordinate vectors are ordered by FITS WCS axis number.  Batch
-inputs are `naxis x npoints` matrices, where each column is one coordinate, or
-vectors of coordinate vectors.
-
-World coordinates are returned in canonical units by default (degrees for
-celestial axes, SI for spectral axes).  Pass `preserve_units=true` to `WCS()`
-to return values in the original header `CUNIT` instead:
-
-```julia
-wcs_asec = WCS(header; preserve_units=true)
-world_asec = pixel_to_world(wcs_asec, [512.0, 512.0])  # arcsec, not degrees
-```
+inputs are `naxis x npoints` matrices, where each column is one coordinate.
+Vectors of vectors (e.g., `[[1.0, 2.0], [2.0, 3.0]]`) are also supported.
 
 ## Programmatic Construction
 
@@ -53,7 +46,7 @@ wcs = WCS(2; ctype=["RA---TAN", "DEC--TAN"], crpix=[512.0, 512.0],
 ```
 
 Supported keywords: `crpix`, `crval`, `cdelt`, `ctype`, `cunit`, `pc`, `cd`,
-`crota`, `lonpole`, `latpole`, `preserve_units`.
+`crota`, `lonpole`, `latpole`, `radesys`, `equinox`, `wcsname`, `preserve_units`.
 
 ## Supported Header Keywords
 
@@ -76,15 +69,29 @@ The parser currently supports these image-WCS keyword families:
   `SSYSSRC`
 - tabular (`-TAB`): `PSi_0`, `PSi_1`, etc. with binary table coordinate arrays
   via `fobj`
+- time axes (`TIME`, `UTC`, `TAI`, `TDB`, `TT`, `TCG`, `TCB`, `LOCAL`):
+  normalized to seconds; `MJDREF`, `TIMESYS`, `TREFPOS`, `TREFDIR`, `TIMEUNIT`
 - observation metadata: `MJD-AVG`, `DATE-AVG`, `OBSGEO-X/Y/Z`
 - celestial reference frame: `RADESYS`, `EQUINOX`
 - WCS identification: `WCSNAME`
 
-Celestial coordinates are normalized to **degrees** and spectral coordinates to
-**SI units** (Hz, m, m/s) at parse time.  `pixel_to_world` returns these
-canonical units by default; pass `preserve_units=true` to `WCS()` to return
-values in the original header `CUNIT` instead.  Linear, time, and Stokes axes
-remain in the units encoded by their header linear transform.
+## Unit Conventions
+
+Celestial coordinates are normalized to **degrees**, spectral coordinates to
+**SI units** (Hz, m, m/s), and time coordinates to **seconds** at parse time.
+`pixel_to_world` returns these
+canonical units, and `world_to_pixel` also expects these canonical units.
+
+Passing `preserve_units=true` to `WCS()` results in `pixel_to_world`
+returning values in the original header `CUNIT` instead. Similarly,
+`world_to_pixel` will expect input world coordinates in the proper CUNIT
+as well.  Linear and Stokes axes remain
+in the units encoded by their header linear transform.
+
+```julia
+wcs_asec = WCS(header; preserve_units=true)
+world_asec = pixel_to_world(wcs_asec, [512.0, 512.0])  # returns arcsec, not degrees
+```
 
 ## Spectral Coordinates (Paper III)
 
@@ -100,7 +107,11 @@ All FITS Paper III spectral types and algorithms are supported:
 | `VRAD`, `VOPT`, `ZOPT`, `BETA` | Derived velocity/redshift types | linear |
 
 Air-wavelength conversions use the IUGG 1999 / Ciddor (1996) refractive-index
-relation (Paper III eq. 4).  Cross-type algorithms (e.g. `WAVE-F2W`) compute
+relation (Paper III eq. 4). Note that the WCSLIB code diverges from the published
+paper and uses the Cox/Edlén (IAU 1957) relation.  The two differ by a nearly
+constant ratio IUGG/Cox ≈ 1.000015 across the optical range.
+
+Cross-type algorithms (e.g. `WAVE-F2W`) compute
 the full X→P→S chain, including derivative scaling of the CD matrix entry.
 Tabular spectral axes (`-TAB`) use binary-table coordinate arrays via `fobj`.
 
@@ -148,24 +159,51 @@ Unknown projection codes throw an informative error at transform time.
 
 ## FITS Loader Extensions
 
-When the corresponding package is loaded, `WCS` accepts:
+When the corresponding package is loaded, `WCS` accepts FITSIO and FITSFiles
+native types directly.  Headers are converted to `Dict` and passed through
+to the core parser.
 
-- `FITSIO.FITSHeader`
-- `FITSIO.HDU`
-- `FITSFiles.Card` vectors
-- `FITSFiles.HDU`
+**FITSIO.jl:**
 
-FITSFiles.jl is currently a regular package dependency, while FITSIO.jl is a
-weak dependency; both loader-specific methods are still isolated in extensions.
+```julia
+using FITSIO, FITSWCS
+
+# From an in-memory FITSHeader.
+fits = FITS("cube.fits")
+hdr = read_header(fits[1])
+wcs = WCS(hdr)
+
+# Directly from an HDU; header is read internally.
+wcs = WCS(fits[1])
+
+# With external table data (-TAB, D2IM, CPDIS), pass the file as fobj.
+wcs = WCS(fits[1]; fobj = fits)
+```
+
+**FITSFiles.jl:**
+
+```julia
+using FITSFiles, FITSWCS
+
+# From a vector of parsed FITS cards.
+fits = FITSFiles.read("cube.fits")
+wcs = WCS(fits[1].cards)
+
+# Directly from an HDU (cards extracted internally).
+wcs = WCS(fits[1])
+
+# With external table data, pass the full HDU vector as fobj.
+wcs = WCS(fits[1]; fobj = fits)
+```
 
 ## Known Limitations
 
 - Velocity-frame correction math (barycentric/LSRK conversion using `SPECSYS`,
   `SSYSOBS`, `VELOSYS`, `ZSOURCE`, `SSYSSRC`, `MJD-AVG`, `OBSGEO-X/Y/Z`)
-  is not yet implemented; the keywords are parsed and stored for downstream
+  is not implemented; the keywords are parsed and stored for downstream
   use or a future package-level correction step.
 - **Grism** algorithm codes `GRI`/`GRA` are not yet implemented.
-- **Time and Stokes axes**: transform linearly but carry no physical
-  interpretation (e.g., `MJDREF`, `DATE-OBS`, `TIMESYS`, polarization state).
+- **Stokes axes**: transform linearly but carry no physical interpretation
+  (polarization state).
 
 Benchmarks for representative paths live under `benchmark/`.
