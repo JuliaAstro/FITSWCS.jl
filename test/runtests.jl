@@ -1210,6 +1210,9 @@ end
     fw = pixel_to_world(wcs_f2w, [3.0])
     @test world_to_pixel(wcs_f2w, SVector{1,Float64}(fw[1])) ≈ [3.0]  atol=1e-10
     @test eltype(pixel_to_world(wcs_f2w, Float32[3.0])) == Float32
+    # Round-trip at a larger offset to exercise the non-linear F2W chain.
+    fw101 = pixel_to_world(wcs_f2w, [101.0])
+    @test world_to_pixel(wcs_f2w, SVector{1,Float64}(fw101[1])) ≈ [101.0] atol=1e-8
 
     # ── 3D cube: RA---TAN DEC--TAN + FREQ-LOG kHz ─────────────────────────────
     # CDELT=1.0 kHz → SI: 1000 Hz.  LOG: S = S_r·exp(w/S_r) with w=1000 Hz.
@@ -1222,13 +1225,17 @@ end
         "CD3_1"=>0.0,"CD3_2"=>0.0,"CD3_3"=>1.0,
         "CUNIT3"=>"kHz","LONPOLE"=>180.0,
     ))
-    crval_si = 1.42e9 * 1000  # 1.42e9 kHz → 1.42e12 Hz
+    crval_si = 1.42e9 * 1000  # 1.42e9 kHz -> 1.42e12 Hz
     @test pixel_to_world(wcs_cube, [512.0,512.0,1.0]) ≈ [83.8221,-5.3911,crval_si]
-    w = 1000.0  # CDELT_SI * 1 pixel
+    # Forward value at 1 pixel offset (regression check).
+    w = 1000.0  # CDELT_SI * 1 pixel = 1e3 Hz
     fw2 = pixel_to_world(wcs_cube, [512.0,512.0,2.0])
     @test fw2[3] ≈ crval_si * exp(w / crval_si)  rtol=1e-12
     bw2 = world_to_pixel(wcs_cube, SVector{3,Float64}(fw2...))
     @test bw2 ≈ [512.0,512.0,2.0]  atol=1e-7
+    # Round-trip at larger offset exercises the LOG non-linearity meaningfully.
+    fw200 = pixel_to_world(wcs_cube, [512.0,512.0,200.0])
+    @test world_to_pixel(wcs_cube, SVector{3,Float64}(fw200...)) ≈ [512.0,512.0,200.0] atol=1e-5
 
     # ── 3D cube: RA---TAN DEC--TAN + TIME (days) ──────────────────────────────
     # CUNIT3='d': 100 days -> 8.64e6 s, cdelt=1 d/px -> 86400 s/px.
@@ -1286,6 +1293,9 @@ end
     @test pixel_to_world(wcs_awav, [1.0])[1] ≈ 5.0e-7
     @test pixel_to_world(wcs_awav, [2.0])[1] ≈ 5.01e-7
     @test world_to_pixel(wcs_awav, SVector{1,Float64}(5.01e-7)) ≈ [2.0]
+    # Round-trip at larger offset exercises the air-wavelength conversion.
+    fw_awav_101 = pixel_to_world(wcs_awav, [101.0])
+    @test world_to_pixel(wcs_awav, SVector{1,Float64}(fw_awav_101[1])) ≈ [101.0] atol=1e-10
 
     # WAVE-W2A round-trip (internal consistency; WCSLIB 8.3 doesn't recognize
     # the code so no astropy regression value is available).
@@ -1293,6 +1303,9 @@ end
                        "CRVAL1"=>5000.0,"CDELT1"=>10.0,"CUNIT1"=>"Angstrom"))
     fw_w2a = pixel_to_world(wcs_w2a, [2.0])
     @test world_to_pixel(wcs_w2a, SVector{1,Float64}(fw_w2a[1])) ≈ [2.0] atol=1e-10
+    # Larger offset round-trip for the cross-type chain.
+    fw_w2a_101 = pixel_to_world(wcs_w2a, [101.0])
+    @test world_to_pixel(wcs_w2a, SVector{1,Float64}(fw_w2a_101[1])) ≈ [101.0] atol=1e-8
 
     # ── Edge: zero-frequency world_to_pixel should give non-finite result ─────
     @test !isfinite(world_to_pixel(wcs_cube,
