@@ -136,11 +136,11 @@ end
 
 # ── Spectral pipeline helpers ─────────────────────────────────────────────────
 
-function _apply_spectral_forward!(::NoSpectralWCSData, world, intermediate, ::Type{T}) where {T}
+@inline function _apply_spectral_forward!(::NoSpectralWCSData, world, intermediate, ::Type{T}) where {T}
     return world  # no spectral axes — zero overhead
 end
 
-function _apply_spectral_forward!(spec::SpectralWCSData, world, intermediate, ::Type{T}) where {T}
+@inline function _apply_spectral_forward!(spec::SpectralWCSData, world, intermediate, ::Type{T}) where {T}
     @inbounds for s in spec.specs
         _is_linear(s) && continue
         world[s.axis] = T(_spectral_x_to_world(T(intermediate[s.axis]), s))
@@ -148,11 +148,11 @@ function _apply_spectral_forward!(spec::SpectralWCSData, world, intermediate, ::
     return world
 end
 
-function _apply_spectral_inverse!(::NoSpectralWCSData, intermediate, world, ::Type{T}) where {T}
+@inline function _apply_spectral_inverse!(::NoSpectralWCSData, intermediate, world, ::Type{T}) where {T}
     return intermediate  # no spectral axes — zero overhead
 end
 
-function _apply_spectral_inverse!(spec::SpectralWCSData, intermediate, world, ::Type{T}) where {T}
+@inline function _apply_spectral_inverse!(spec::SpectralWCSData, intermediate, world, ::Type{T}) where {T}
     @inbounds for s in spec.specs
         _is_linear(s) && continue
         intermediate[s.axis] = T(_spectral_world_to_x(T(world[s.axis]), s))
@@ -162,36 +162,36 @@ end
 
 # ── Grism pipeline helpers ────────────────────────────────────────────────────
 
-function _apply_grism_forward!(::NoGrismWCSData, world, intermediate, ::Type{T}) where {T}
+@inline function _apply_grism_forward!(::NoGrismWCSData, world, intermediate, ::Type{T}) where {T}
     return world  # no grism axes -- zero overhead
 end
 
-function _apply_grism_forward!(grism::GrismWCSData, world, intermediate, ::Type{T}) where {T}
+@inline function _apply_grism_forward!(grism::GrismWCSData, world, intermediate, ::Type{T}) where {T}
     @inbounds for g in grism.specs
         world[g.axis] = T(_grism_x_to_world(T(intermediate[g.axis]), g))
     end
     return world
 end
 
-function _apply_grism_inverse!(::NoGrismWCSData, intermediate, world, ::Type{T}) where {T}
+@inline function _apply_grism_inverse!(::NoGrismWCSData, intermediate, world, ::Type{T}) where {T}
     return intermediate  # no grism axes -- zero overhead
 end
 
-function _apply_grism_inverse!(grism::GrismWCSData, intermediate, world, ::Type{T}) where {T}
+@inline function _apply_grism_inverse!(grism::GrismWCSData, intermediate, world, ::Type{T}) where {T}
     @inbounds for g in grism.specs
         intermediate[g.axis] = T(_grism_world_to_x(T(world[g.axis]), g))
     end
     return intermediate
 end
 
-function _set_celestial_axes!(coords::AbstractVector, lon_idx::Int, lat_idx::Int, lon, lat)
+@inline function _set_celestial_axes!(coords::AbstractVector, lon_idx::Int, lat_idx::Int, lon, lat)
     # Mutable coordinate storage can be updated in place.
     coords[lon_idx] = lon
     coords[lat_idx] = lat
     return coords
 end
 
-function _set_celestial_axes!(coords::StaticVector{N, T}, lon_idx::Int, lat_idx::Int, lon, lat) where {N, T}
+@inline function _set_celestial_axes!(coords::StaticVector{N, T}, lon_idx::Int, lat_idx::Int, lon, lat) where {N, T}
     # Immutable static coordinates are rebuilt with the celestial axes replaced.
     return SVector{N, T}(ntuple(i -> i == lon_idx ? T(lon) : i == lat_idx ? T(lat) : coords[i], N))
 end
