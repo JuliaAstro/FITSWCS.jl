@@ -212,62 +212,56 @@ These benchmarks figures are re-run rarely so
 performance on `main` may diverge from results here in the future.
 
 Benchmark suite: pixel_to_world
-┌────────────────────────────┬─────────────┬───────────┬────────┐
-│ Benchmark                  │ Median Time │    Memory │ Allocs │
-├────────────────────────────┼─────────────┼───────────┼────────┤
-│ 2D-coupled-TAB/scalar      │   49.050 ns │   0 bytes │      0 │
-│ 3D-cube-TAB/batch-100      │    6.267 μs │  7.71 KiB │     45 │
-│ 3D-cube-TAB/scalar         │   87.500 ns │   0 bytes │      0 │
-│ 3D-cube-spec/scalar        │   71.580 ns │   0 bytes │      0 │
-│ 3D-cube/scalar             │   69.270 ns │   0 bytes │      0 │
-│ AIT/scalar                 │   84.030 ns │   0 bytes │      0 │
-│ TAN-SIP-PaperIV/scalar     │  157.830 ns │   0 bytes │      0 │
-│ TAN-SIP/scalar             │  101.000 ns │   0 bytes │      0 │
-│ TAN/batch-100/Float32      │    4.947 μs │  5.30 KiB │     44 │
-│ TAN/batch-100/Float64      │    5.531 μs │  6.02 KiB │     44 │
-│ TAN/batch-1M/Float32       │    9.378 ms │  7.63 MiB │     45 │
-│ TAN/batch-1M/Float64       │   14.073 ms │ 15.26 MiB │     45 │
-│ TAN/scalar                 │   65.080 ns │   0 bytes │      0 │
-│ TAN/scalar/SVector Float32 │   49.320 ns │   0 bytes │      0 │
-│ TAN/scalar/SVector Float64 │   64.710 ns │   0 bytes │      0 │
-│ TAN/scalar/Tuple           │   65.450 ns │   0 bytes │      0 │
-│ TAN/scalar/preserve_units  │   65.310 ns │   0 bytes │      0 │
-│ grism/AWAV-GRA/scalar      │   16.330 ns │   0 bytes │      0 │
-└────────────────────────────┴─────────────┴───────────┴────────┘
+| Benchmark | Median Time | Memory | Allocs |
+|-----------|------------:|-------:|--------:|
+| `2D-coupled-TAB/scalar` | 49.050 ns | 0 bytes | 0 |
+| `3D-cube-TAB/batch-100` | 6.267 μs | 7.71 KiB | 45 |
+| `3D-cube-TAB/scalar` | 87.500 ns | 0 bytes | 0 |
+| `3D-cube-spec/scalar` | 71.580 ns | 0 bytes | 0 |
+| `3D-cube/scalar` | 69.270 ns | 0 bytes | 0 |
+| `AIT/scalar` | 84.030 ns | 0 bytes | 0 |
+| `TAN-SIP-PaperIV/scalar` | 157.830 ns | 0 bytes | 0 |
+| `TAN-SIP/scalar` | 101.000 ns | 0 bytes | 0 |
+| `TAN/batch-100/Float32` | 4.947 μs | 5.30 KiB | 44 |
+| `TAN/batch-100/Float64` | 5.531 μs | 6.02 KiB | 44 |
+| `TAN/batch-1M/Float32` | 9.378 ms | 7.63 MiB | 45 |
+| `TAN/batch-1M/Float64` | 14.073 ms | 15.26 MiB | 45 |
+| `TAN/scalar` | 65.080 ns | 0 bytes | 0 |
+| `TAN/scalar/SVector Float32` | 49.320 ns | 0 bytes | 0 |
+| `TAN/scalar/SVector Float64` | 64.710 ns | 0 bytes | 0 |
+| `TAN/scalar/Tuple` | 65.450 ns | 0 bytes | 0 |
+| `TAN/scalar/preserve_units` | 65.310 ns | 0 bytes | 0 |
+| `grism/AWAV-GRA/scalar` | 16.330 ns | 0 bytes | 0 |
 
 Benchmark suite: world_to_pixel
-┌───────────────────────────┬─────────────┬───────────┬────────┐
-│ Benchmark                 │ Median Time │    Memory │ Allocs │
-├───────────────────────────┼─────────────┼───────────┼────────┤
-│ 2D-coupled-TAB/scalar     │   50.110 ns │   0 bytes │      0 │
-│ 3D-cube-TAB/batch-100     │    6.754 μs │  7.71 KiB │     45 │
-│ 3D-cube-TAB/scalar        │   99.030 ns │   0 bytes │      0 │
-│ 3D-cube-spec/scalar       │   82.890 ns │   0 bytes │      0 │
-│ 3D-cube/scalar            │   71.060 ns │   0 bytes │      0 │
-│ AIT/scalar                │   75.060 ns │   0 bytes │      0 │
-│ TAN-SIP-PaperIV/scalar    │  528.620 ns │   0 bytes │      0 │
-│ TAN-SIP/scalar            │  236.460 ns │   0 bytes │      0 │
-│ TAN/batch-100/Float32     │    4.894 μs │  5.30 KiB │     44 │
-│ TAN/batch-100/Float64     │    5.781 μs │  6.02 KiB │     44 │
-│ TAN/batch-1M/Float32      │   10.716 ms │  7.63 MiB │     45 │
-│ TAN/batch-1M/Float64      │   13.327 ms │ 15.27 MiB │     45 │
-│ TAN/scalar                │   62.560 ns │   0 bytes │      0 │
-│ TAN/scalar/preserve_units │   62.670 ns │   0 bytes │      0 │
-│ grism/AWAV-GRA/scalar     │   15.780 ns │   0 bytes │      0 │
-└───────────────────────────┴─────────────┴───────────┴────────┘
+| Benchmark | Median Time | Memory | Allocs |
+|-----------|------------:|-------:|--------:|
+| `2D-coupled-TAB/scalar` | 50.110 ns | 0 bytes | 0 |
+| `3D-cube-TAB/batch-100` | 6.754 μs | 7.71 KiB | 45 |
+| `3D-cube-TAB/scalar` | 99.030 ns | 0 bytes | 0 |
+| `3D-cube-spec/scalar` | 82.890 ns | 0 bytes | 0 |
+| `3D-cube/scalar` | 71.060 ns | 0 bytes | 0 |
+| `AIT/scalar` | 75.060 ns | 0 bytes | 0 |
+| `TAN-SIP-PaperIV/scalar` | 528.620 ns | 0 bytes | 0 |
+| `TAN-SIP/scalar` | 236.460 ns | 0 bytes | 0 |
+| `TAN/batch-100/Float32` | 4.894 μs | 5.30 KiB | 44 |
+| `TAN/batch-100/Float64` | 5.781 μs | 6.02 KiB | 44 |
+| `TAN/batch-1M/Float32` | 10.716 ms | 7.63 MiB | 45 |
+| `TAN/batch-1M/Float64` | 13.327 ms | 15.27 MiB | 45 |
+| `TAN/scalar` | 62.560 ns | 0 bytes | 0 |
+| `TAN/scalar/preserve_units` | 62.670 ns | 0 bytes | 0 |
+| `grism/AWAV-GRA/scalar` | 15.780 ns | 0 bytes | 0 |
 
 Benchmark suite: parsing
-┌────────────────────┬─────────────┬───────────┬────────┐
-│ Benchmark          │ Median Time │    Memory │ Allocs │
-├────────────────────┼─────────────┼───────────┼────────┤
-│ WCS/3D-cube        │  368.853 μs │ 68.83 KiB │   1850 │
-│ WCS/3D-cube-TAB    │  320.728 μs │ 69.78 KiB │   1839 │
-│ WCS/3D-cube-spec   │  720.092 μs │ 78.62 KiB │   2115 │
-│ WCS/AIT            │  246.903 μs │ 44.05 KiB │   1192 │
-│ WCS/TAN            │  328.439 μs │ 44.09 KiB │   1193 │
-│ WCS/TAN-SIP        │  450.694 μs │ 66.75 KiB │   1737 │
-│ WCS/grism/AWAV-GRA │  294.696 μs │ 37.89 KiB │    984 │
-└────────────────────┴─────────────┴───────────┴────────┘
+| Benchmark | Median Time | Memory | Allocs |
+|-----------|------------:|-------:|--------:|
+| `WCS/3D-cube` | 368.853 μs | 68.83 KiB | 1850 |
+| `WCS/3D-cube-TAB` | 320.728 μs | 69.78 KiB | 1839 |
+| `WCS/3D-cube-spec` | 720.092 μs | 78.62 KiB | 2115 |
+| `WCS/AIT` | 246.903 μs | 44.05 KiB | 1192 |
+| `WCS/TAN` | 328.439 μs | 44.09 KiB | 1193 |
+| `WCS/TAN-SIP` | 450.694 μs | 66.75 KiB | 1737 |
+| `WCS/grism/AWAV-GRA` | 294.696 μs | 37.89 KiB | 984 |
 
 ## Known Limitations
 
