@@ -263,6 +263,13 @@ Benchmark suite: parsing
 | `WCS/TAN-SIP` | 450.694 μs | 66.75 KiB | 1737 |
 | `WCS/grism/AWAV-GRA` | 294.696 μs | 37.89 KiB | 984 |
 
+## References
+[This NASA page](https://fits.gsfc.nasa.gov/fits_wcs.html) links to most of the
+relevant documentation on the FITS standard.
+[wcslib](https://www.atnf.csiro.au/computing/software/wcs/wcslib/index.html)
+is the de-facto standard software implementation of the FITS WCS standard
+written by Mark Calabretta.
+
 ## Known Limitations
 
 - Velocity-frame correction math (barycentric/LSRK conversion using `SPECSYS`,
