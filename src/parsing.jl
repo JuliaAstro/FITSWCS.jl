@@ -136,6 +136,8 @@ function parse_ctype(ctype_str::AbstractString)
         :lat
     elseif haskey(_STYPE_STR, coord_part)
         :spectral
+    elseif coord_part in _TIME_SYSTEMS
+        :time
     else
         :linear
     end
@@ -516,7 +518,42 @@ function _merge_spectral_aux(aux::NoAuxiliaryWCSData, spectral::SpectralWCSData)
 end
 function _merge_spectral_aux(aux::AuxiliaryWCSData, spectral::AbstractSpectralWCSData)
     return AuxiliaryWCSData(det2im = aux.det2im, cpdis = aux.cpdis,
-                            tabular = aux.tabular, spectral = spectral)
+                            tabular = aux.tabular, spectral = spectral,
+                            time = aux.time)
+end
+
+# ── Time axis spec construction ────────────────────────────────────────────────
+
+function _build_time_specs(ctype::Vector{String}, naxis::Int,
+                           header::AbstractDict, alt_str::AbstractString)
+    specs = TimeSpec[]
+    for i in 1:naxis
+        coord_part, coord_type, algo_code = parse_ctype(ctype[i])
+        coord_type == :time || continue
+        algo_code == "TAB" && continue   # TAB axes handled separately
+        push!(specs, TimeSpec(
+            i,
+            Float64(get(header, "MJDREF$(alt_str)", get(header, "MJDREF", NaN))),
+            String(get(header, "TIMESYS$(alt_str)", get(header, "TIMESYS", ""))),
+            String(get(header, "TREFPOS$(alt_str)", get(header, "TREFPOS", ""))),
+            String(get(header, "TREFDIR$(alt_str)", get(header, "TREFDIR", ""))),
+            String(get(header, "TIMEUNIT$(alt_str)", get(header, "TIMEUNIT", ""))),
+        ))
+    end
+    return isempty(specs) ? NoTimeWCSData() :
+           TimeWCSData(ntuple(i -> specs[i], length(specs)))
+end
+
+function _merge_time_aux(aux::NoAuxiliaryWCSData, time::NoTimeWCSData)
+    return aux
+end
+function _merge_time_aux(aux::NoAuxiliaryWCSData, time::TimeWCSData)
+    return AuxiliaryWCSData(time = time)
+end
+function _merge_time_aux(aux::AuxiliaryWCSData, time::AbstractTimeWCSData)
+    return AuxiliaryWCSData(det2im = aux.det2im, cpdis = aux.cpdis,
+                            tabular = aux.tabular, spectral = aux.spectral,
+                            time = time)
 end
 
 function _build_observation_spec(header::AbstractDict, alt_str::AbstractString)
@@ -731,6 +768,8 @@ function _axis_unit_scaling((_, coord_type, algo_code), cunit_i::AbstractString)
         return f
     elseif coord_type == :spectral
         return _unit_to_si(cunit_i)
+    elseif coord_type == :time
+        return _unit_to_second(cunit_i)
     else
         return 1.0
     end
@@ -906,6 +945,10 @@ function WCS(header::AbstractDict; fobj = nothing, alt::Char = ' ', minerr::Real
     # _build_spectral_specs does not need to apply _unit_to_si itself.
     spectral = _build_spectral_specs(ctype, crval, cunit, header, alt_str, naxis)
     aux = _merge_spectral_aux(aux, spectral)
+
+    # ── Build time-axis specifications ────────────────────────────────────────
+    time = _build_time_specs(ctype, naxis, header, alt_str)
+    aux = _merge_time_aux(aux, time)
 
     # ── Build the CD matrix (from raw CDELT, still in CUNIT) ──────────────────
     cd = build_cd_matrix(header, naxis, cdelt, alt)
