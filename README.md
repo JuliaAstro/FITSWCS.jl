@@ -207,7 +207,5 @@ wcs = WCS(fits[1]; fobj = fits)
   `SSYSOBS`, `VELOSYS`, `ZSOURCE`, `SSYSSRC`, `MJD-AVG`, `OBSGEO-X/Y/Z`)
   is not implemented; the keywords are parsed and stored for downstream
   use or a future package-level correction step.
-- **Stokes axes**: transform linearly but carry no physical interpretation
-  (polarization state).
 
 Benchmarks for representative paths live under `benchmark/`.
