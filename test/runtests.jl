@@ -1158,18 +1158,33 @@ end
 
 # ──────────────────────────────────────────────────────────────────────────────
 @testset "Spectral coordinates (Paper III)" begin
-    # ── Linear spectral types preserve CUNIT ──────────────────────────────────
+    # ── Linear spectral types normalised to SI ────────────────────────────────
+    # FREQ with CUNIT='MHz': 1420.4 MHz -> 1.4204e9 Hz, cdelt=1 MHz/px -> 1e6 Hz/px
     wcs = WCS(Dict("NAXIS"=>1,"CTYPE1"=>"FREQ","CRPIX1"=>1.0,"CRVAL1"=>1420.4,
                    "CDELT1"=>1.0,"CUNIT1"=>"MHz"))
-    @test pixel_to_world(wcs, Float32[3.0]) ≈ Float32[1422.4]
+    @test pixel_to_world(wcs, Float32[3.0]) ≈ Float32[1.4224e9]
     @test eltype(pixel_to_world(wcs, Float32[3.0])) == Float32
-    @test world_to_pixel(wcs, SVector{1,Float64}(1422.4)) ≈ [3.0]
+    @test world_to_pixel(wcs, SVector{1,Float64}(1.4224e9)) ≈ [3.0]
+
+    # ── Linear spectral types with preserve_units=true ────────────────────────
+    wcs_preserve = WCS(Dict("NAXIS"=>1,"CTYPE1"=>"FREQ","CRPIX1"=>1.0,"CRVAL1"=>1420.4,
+                         "CDELT1"=>1.0,"CUNIT1"=>"MHz"), preserve_units=true)
+    @test pixel_to_world(wcs_preserve, Float32[3.0]) ≈ Float32[1422.4]
+    @test eltype(pixel_to_world(wcs_preserve, Float32[3.0])) == Float32
+    @test world_to_pixel(wcs_preserve, SVector{1,Float64}(1422.4)) ≈ [3.0]
 
     # ── WAVE (linear) with non-SI CUNIT ───────────────────────────────────────
+    # WAVE with CUNIT='nm': 500 nm -> 5e-7 m, cdelt=10 nm/px -> 1e-8 m/px
     wcs_nm = WCS(Dict("NAXIS"=>1,"CTYPE1"=>"WAVE","CRPIX1"=>1.0,"CRVAL1"=>500.0,
                       "CDELT1"=>10.0,"CUNIT1"=>"nm"))
-    @test pixel_to_world(wcs_nm, [2.0]) ≈ [510.0]
-    @test world_to_pixel(wcs_nm, SVector{1,Float64}(510.0)) ≈ [2.0]
+    @test pixel_to_world(wcs_nm, [2.0]) ≈ [5.1e-7]
+    @test world_to_pixel(wcs_nm, SVector{1,Float64}(5.1e-7)) ≈ [2.0]
+
+    # ── WAVE (linear) with non-SI CUNIT with preserve_units=true ──────────────
+    wcs_nm_preserve = WCS(Dict("NAXIS"=>1,"CTYPE1"=>"WAVE","CRPIX1"=>1.0,"CRVAL1"=>500.0,
+                      "CDELT1"=>10.0,"CUNIT1"=>"nm"), preserve_units=true)
+    @test pixel_to_world(wcs_nm_preserve, [2.0]) ≈ [510.0]
+    @test world_to_pixel(wcs_nm_preserve, SVector{1,Float64}(510.0)) ≈ [2.0]
 
     # ── Cross-type: WAVE-F2W with CDELT in S-type display units ──────────────
     # CDELT is in m/pixel (S-type = wavelength).  Regression against astropy.
@@ -1202,12 +1217,13 @@ end
     @test bw2 ≈ [512.0,512.0,2.0]  atol=1e-7
 
     # ── Air-wavelength types ─────────────────────────────────────────────────
-    # AWAV linear with non-SI CUNIT: round-trip in display units.
+    # AWAV linear with non-SI CUNIT: normalised to SI (m).
+    # 5000 Angstrom -> 5e-7 m, cdelt=10 A/px -> 1e-9 m/px
     wcs_awav = WCS(Dict("NAXIS"=>1,"CTYPE1"=>"AWAV","CRPIX1"=>1.0,
                         "CRVAL1"=>5000.0,"CDELT1"=>10.0,"CUNIT1"=>"Angstrom"))
-    @test pixel_to_world(wcs_awav, [1.0])[1] ≈ 5000.0
-    @test pixel_to_world(wcs_awav, [2.0])[1] ≈ 5010.0
-    @test world_to_pixel(wcs_awav, SVector{1,Float64}(5010.0)) ≈ [2.0]
+    @test pixel_to_world(wcs_awav, [1.0])[1] ≈ 5.0e-7
+    @test pixel_to_world(wcs_awav, [2.0])[1] ≈ 5.01e-7
+    @test world_to_pixel(wcs_awav, SVector{1,Float64}(5.01e-7)) ≈ [2.0]
 
     # WAVE-W2A round-trip (internal consistency; WCSLIB 8.3 doesn't recognize
     # the code so no astropy regression value is available).

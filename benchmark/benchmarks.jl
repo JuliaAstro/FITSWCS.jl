@@ -80,6 +80,16 @@ const _hdr_tan = Dict(
 )
 const WCS_TAN = WCS(_hdr_tan)
 
+const _hdr_tan_preserved = Dict(
+    "NAXIS"  => 2,
+    "CTYPE1" => "RA---TAN",  "CTYPE2" => "DEC--TAN",
+    "CRPIX1" => 512.0,       "CRPIX2" => 512.0,
+    "CRVAL1" => 83.8221 * 3600,     "CRVAL2" => -5.3911 * 3600,
+    "CDELT1" => -2.7778e-4 * 3600,  "CDELT2" =>  2.7778e-4 * 3600,
+    "CUNIT1" => "arcsec",  "CUNIT2" => "arcsec",
+)
+const WCS_TAN_PRESERVED = WCS(_hdr_tan_preserved; preserve_units = true)
+
 const _hdr_ait = Dict(
     "NAXIS"  => 2,
     "CTYPE1" => "GLON-AIT",  "CTYPE2" => "GLAT-AIT",
@@ -92,13 +102,13 @@ const WCS_AIT = WCS(_hdr_ait)
 const _hdr_sip = Dict(
     "NAXIS"   => 2,
     "CTYPE1"  => "RA---TAN-SIP",  "CTYPE2"  => "DEC--TAN-SIP",
-    "CRPIX1"  => 512.0,            "CRPIX2"  => 512.0,
-    "CRVAL1"  => 150.0,            "CRVAL2"  => 2.5,
-    "CDELT1"  => -2.7778e-4,       "CDELT2"  =>  2.7778e-4,
+    "CRPIX1"  => 512.0,           "CRPIX2"  => 512.0,
+    "CRVAL1"  => 150.0,           "CRVAL2"  => 2.5,
+    "CDELT1"  => -2.7778e-4,      "CDELT2"  =>  2.7778e-4,
     "A_ORDER" => 2,
-    "A_2_0"   => 5.0e-6,           "A_0_2"   => 2.0e-6,  "A_1_1" => 0.0,
+    "A_2_0"   => 5.0e-6,          "A_0_2"   => 2.0e-6,  "A_1_1" => 0.0,
     "B_ORDER" => 2,
-    "B_2_0"   => 1.0e-6,           "B_0_2"   => 0.0,     "B_1_1" => 3.0e-6,
+    "B_2_0"   => 1.0e-6,          "B_0_2"   => 0.0,     "B_1_1" => 3.0e-6,
 )
 const WCS_SIP = WCS(_hdr_sip)
 
@@ -285,6 +295,7 @@ const _batch_world_cube_tab = pixel_to_world(WCS_CUBE_TAB, _batch_pix_cube_tab)
 SUITE["pixel_to_world"] = BenchmarkGroup()
 let g = SUITE["pixel_to_world"]
     g["TAN/scalar"] = @benchmarkable pixel_to_world($WCS_TAN, $_pix_tan) evals=100
+    g["TAN/scalar/preserve_units"] = @benchmarkable pixel_to_world($WCS_TAN_PRESERVED, $_pix_tan) evals=100
     g["TAN/scalar/SVector Float64"] = @benchmarkable pixel_to_world($WCS_TAN, $(SVector{2,Float64}(_pix_tan))) evals=100
     g["TAN/scalar/SVector Float32"] = @benchmarkable pixel_to_world($WCS_TAN, $(SVector{2,Float32}(Float32.(_pix_tan)))) evals=100
     g["TAN/scalar/Tuple"] = @benchmarkable pixel_to_world($WCS_TAN, $(Tuple(_pix_tan))) evals=100
@@ -307,6 +318,7 @@ end
 SUITE["world_to_pixel"] = BenchmarkGroup()
 let g = SUITE["world_to_pixel"]
     g["TAN/scalar"] = @benchmarkable world_to_pixel($WCS_TAN, $_world_tan) evals=100
+    g["TAN/scalar/preserve_units"] = @benchmarkable world_to_pixel($WCS_TAN_PRESERVED, $(_world_tan * 3600)) evals=100
     g["AIT/scalar"] = @benchmarkable world_to_pixel($WCS_AIT, $_world_ait) evals=100
     g["TAN-SIP/scalar"] = @benchmarkable world_to_pixel($WCS_SIP, $_world_sip) evals=100
     g["TAN-SIP-PaperIV/scalar"] = @benchmarkable world_to_pixel($WCS_SIP_PAPERIV, $_world_sip_paperiv) evals=100

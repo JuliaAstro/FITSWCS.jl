@@ -26,11 +26,15 @@ hdr = Dict(
 )
 wcs = WCS(hdr)
 
-# Convert pixel → world (RA/Dec in degrees)
-world = pixel_to_world(wcs, [512.0, 512.0])   # → [83.8221, -5.3911]
+# Convert pixel -> world (RA/Dec in degrees)
+world = pixel_to_world(wcs, [512.0, 512.0])   # -> [83.8221, -5.3911]
 
-# Convert world → pixel
-pix   = world_to_pixel(wcs, world)             # → [512.0, 512.0]
+# Convert world -> pixel
+pix   = world_to_pixel(wcs, world)             # -> [512.0, 512.0]
+
+# Return world coordinates in original header units (e.g., arcsec, Angstrom)
+wcs_preserved = WCS(hdr; preserve_units = true)
+world_as = pixel_to_world(wcs_preserved, [512.0, 512.0])
 
 # Batch transform: each column of pixels is one coordinate.
 pix_batch = [1.0 512.0 1024.0;

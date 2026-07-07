@@ -58,10 +58,10 @@ struct WCSTransform{N, L, P <: Union{Nothing, AbstractProjection}, D <: Abstract
     naxis::Int
     crpix::SVector{N, Float64}
     crval::SVector{N, Float64}
-    cd::SMatrix{N, N, Float64, L}       # naxis × naxis
+    cd::SMatrix{N, N, Float64, L}       # naxis x naxis
     ctype::Vector{String}
     cunit::Vector{String}
-    lonpole::Float64          # degrees; φₚ (Paper II)
+    lonpole::Float64          # degrees; phi_p (Paper II)
     latpole::Float64          # degrees; used during construction
     alpha_p::Float64          # degrees; celestial lon of native N pole
     delta_p::Float64          # degrees; celestial lat of native N pole
@@ -71,6 +71,11 @@ struct WCSTransform{N, L, P <: Union{Nothing, AbstractProjection}, D <: Abstract
     lon_axis::Int             # 1-based index; 0 = no celestial lon axis
     lat_axis::Int             # 1-based index; 0 = no celestial lat axis
     obs::O                    # spectral reference-frame metadata
+    # Unit scaling for preserve_units feature.
+    # unit_scaling[i] converts CUNIT to canonical: canonical = scaling * cunit_value.
+    # Set to all 1.0 when preserve_units=false.
+    preserve_units::Bool
+    unit_scaling::SVector{N, Float64}
 end
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -452,8 +457,9 @@ function _build_spectral_specs(ctype::Vector{String}, crval::Vector{Float64},
             x_type, p_type, algorithm = _ALGORITHM_MAP[algo_code]
         end
 
-        # Convert CRVAL from display units to SI.
-        crval_si = crval[i] * _unit_to_si(cunit[i])
+        # crval[i] has already been normalized to SI by the uniform loop
+        # in WCS() before _build_spectral_specs is called.
+        crval_si = crval[i]
 
         # Rest frequency / wavelength (always in SI: Hz and m).
         restfrq = Float64(get(header, "RESTFRQ$(alt_str)",
@@ -691,6 +697,36 @@ function build_cd_matrix(header::AbstractDict, naxis::Int,
     return cd
 end
 
+# ── Unit scaling helper for preserve_units ────────────────────────────────────
+
+"""
+    _axis_unit_scaling((coord_part, coord_type, algo_code), cunit_i) -> Float64
+
+Return the scaling factor that converts a world-coordinate value from the
+axis's header CUNIT to its canonical unit (degrees for celestial, SI for
+spectral).  The caller has already parsed the CTYPE string; this function
+receives the tuple directly to avoid re-parsing.
+
+Returns 1.0 for axes whose CUNIT already matches the canonical unit and for
+unrecognised axis types.
+"""
+function _axis_unit_scaling((_, coord_type, algo_code), cunit_i::AbstractString)::Float64
+    # TAB coordinate columns hold physical values in CUNIT, so the
+    # boundary scaling is meaningful -- compute it even for TAB.
+    # Only internal crval/CD normalization must skip TAB (handled
+    # by the loop in WCS()).
+    if coord_type in (:lon, :lat)
+        f = unit_to_deg(cunit_i)
+        isnan(f) && throw(ArgumentError(
+            "unsupported celestial CUNIT: $(repr(cunit_i))"))
+        return f
+    elseif coord_type == :spectral
+        return _unit_to_si(cunit_i)
+    else
+        return 1.0
+    end
+end
+
 # ──────────────────────────────────────────────────────────────────────────────
 # Main parsing entry point
 # ──────────────────────────────────────────────────────────────────────────────
@@ -749,7 +785,7 @@ hdr = Dict(
 wcs = WCS(hdr)
 ```
 """
-function WCS(header::AbstractDict; fobj = nothing, alt::Char = ' ', minerr::Real = 0.0)
+function WCS(header::AbstractDict; fobj = nothing, alt::Char = ' ', minerr::Real = 0.0, preserve_units::Bool = false)
     if alt != ' ' && !(('A' <= alt <= 'Z'))
         throw(ArgumentError("alt must be ' ' or 'A'–'Z', got $(repr(alt))"))
     end
@@ -794,12 +830,13 @@ function WCS(header::AbstractDict; fobj = nothing, alt::Char = ' ', minerr::Real
     reject_unsupported_nonlinear_axes(ctype)
 
     # ── Parse CTYPE to determine projection and axis roles ────────────────────
+    parsed_ctype = [parse_ctype(ctype[i]) for i in 1:naxis]
     lon_axis = 0
     lat_axis = 0
     proj_code = ""
 
     for i in 1:naxis
-        _, coord_type, pc = parse_ctype(ctype[i])
+        _, coord_type, pc = parsed_ctype[i]
         pc == "TAB" && continue
         if coord_type == :lon
             if lon_axis != 0
@@ -813,7 +850,7 @@ function WCS(header::AbstractDict; fobj = nothing, alt::Char = ' ', minerr::Real
             end
             lat_axis = i
             # Consistency: both axes should have the same projection code.
-            lat_pc = parse_ctype(ctype[i])[3]
+            lat_pc = pc
             if !isempty(proj_code) && !isempty(lat_pc) && proj_code != lat_pc
                 throw(ArgumentError(
                     "longitude and latitude CTYPEs have different projection codes: " *
@@ -845,41 +882,48 @@ function WCS(header::AbstractDict; fobj = nothing, alt::Char = ' ', minerr::Real
     sip = parse_sip_distortion(header, crpix, naxis, alt)
     pipeline = distortion_pipeline(sip, aux)
 
-    # ── Build spectral-axis specifications (must run before CD matrix so that
-    # CDELT scaling for spectral axes is reflected in the matrix). ─────────────
+    # ── Normalize crval to canonical units before building spectral specs ─────
+    # TAB axes are skipped: their crval values are lookup-table indices, not
+    # physical quantities.
+    unit_scaling_vec = Float64[_axis_unit_scaling(parsed_ctype[i], cunit[i]) for i in 1:naxis]
+    for i in 1:naxis
+        _, _, algo_code = parsed_ctype[i]
+        algo_code == "TAB" && continue
+        crval[i] *= unit_scaling_vec[i]
+    end
+
+    # ── Build spectral-axis specifications ────────────────────────────────────
+    # crval[i] is already in SI for spectral axes at this point, so
+    # _build_spectral_specs does not need to apply _unit_to_si itself.
     spectral = _build_spectral_specs(ctype, crval, cunit, header, alt_str, naxis)
     aux = _merge_spectral_aux(aux, spectral)
 
-    # ── Build the CD matrix ───────────────────────────────────────────────────
+    # ── Build the CD matrix (from raw CDELT, still in CUNIT) ──────────────────
     cd = build_cd_matrix(header, naxis, cdelt, alt)
 
-    # Scale CD matrix columns for spectral axes that had CDELT modified.
-    # CDELT scaling converts from S-type display to X-type SI; the same factor
-    # applies to any CDi_j entries coupling the spectral axis to other axes.
-    if spectral isa SpectralWCSData
-        for s in spectral.specs
-            sc = s.cdelt_scale * _unit_to_si(cunit[s.axis])
-            for row in 1:naxis
-                cd[row, s.axis] *= sc
-            end
-        end
+    # ── Normalize CD matrix rows to canonical units ───────────────────────────
+    # TAB axes are skipped: their CD entries are in index units.
+    for i in 1:naxis
+        _, _, algo_code = parsed_ctype[i]
+        algo_code == "TAB" && continue
+        cd[i, :] .*= unit_scaling_vec[i]
     end
 
-    # ── Normalize celestial angular units to degrees at the public API boundary
-    # Linear and spectral axes remain in the units encoded by their headers.
-    for i in (lon_axis, lat_axis)
-        i == 0 && continue
-        f = unit_to_deg(cunit[i])
-        isnan(f) && throw(ArgumentError("unsupported celestial CUNIT$(i): $(repr(cunit[i]))"))
-        crval[i] *= f
-        cd[i, :] .*= f
+    # Apply cdelt_scale (dX/dS derivative) for spectral axes.
+    # The _unit_to_si factor is already handled by the CD row normalization above.
+    if spectral isa SpectralWCSData
+        for s in spectral.specs
+            for row in 1:naxis
+                cd[row, s.axis] *= s.cdelt_scale
+            end
+        end
     end
 
     # ── Celestial pole parameters ─────────────────────────────────────────────
     lonpole_raw = get(header, "LONPOLE$(alt_str)", get(header, "LONPOLE", nothing))
     latpole_raw = get(header, "LATPOLE$(alt_str)", get(header, "LATPOLE", nothing))
 
-    lonpole::Float64 = if !isnothing(lonpole_raw)
+    lonpole = if !isnothing(lonpole_raw)
         Float64(lonpole_raw)
     elseif projection !== nothing
         theta0 = native_theta0(projection)
@@ -889,7 +933,7 @@ function WCS(header::AbstractDict; fobj = nothing, alt::Char = ' ', minerr::Real
         0.0
     end
 
-    latpole::Float64 = !isnothing(latpole_raw) ? Float64(latpole_raw) : 90.0
+    latpole = !isnothing(latpole_raw) ? Float64(latpole_raw) : 90.0
 
     # ── Compute native pole position in celestial coords (alpha_p, delta_p) ──
     # These are the celestial coordinates of the native north pole (theta=90°).
@@ -897,22 +941,22 @@ function WCS(header::AbstractDict; fobj = nothing, alt::Char = ' ', minerr::Real
     # For other projections, compute from the constraint that the fiducial native
     # point (phi0, theta0) maps to celestial (alpha0, delta0) = CRVAL.
     # Paper II, Section 2.4, Eq. 11.
-    alpha_p::Float64 = 0.0
-    delta_p::Float64 = 90.0
+    alpha_p = 0.0
+    delta_p = 90.0
 
     if projection !== nothing && lon_axis > 0 && lat_axis > 0
-        alpha0 = crval[lon_axis] * (π / 180.0)
-        delta0 = crval[lat_axis] * (π / 180.0)
-        phi0 = native_phi0(projection) * (π / 180.0)
-        theta0 = native_theta0(projection) * (π / 180.0)
-        phi_p = lonpole * (π / 180.0)
+        alpha0 = deg2rad(crval[lon_axis])
+        delta0 = deg2rad(crval[lat_axis])
+        phi0 = deg2rad(native_phi0(projection))
+        theta0 = deg2rad(native_theta0(projection))
+        phi_p = deg2rad(lonpole)
 
         ap, dp = compute_native_pole(
             alpha0, delta0, phi0, theta0, phi_p,
-            latpole * (π / 180.0)
+            deg2rad(latpole)
         )
-        alpha_p = ap * (180.0 / π)
-        delta_p = dp * (180.0 / π)
+        alpha_p = rad2deg(ap)
+        delta_p = rad2deg(dp)
     end
 
     # ── Build observation-level metadata for frame corrections ────────────────
@@ -926,5 +970,7 @@ function WCS(header::AbstractDict; fobj = nothing, alt::Char = ' ', minerr::Real
         ctype, cunit,
         lonpole, latpole, alpha_p, delta_p,
         projection, pipeline, aux, lon_axis, lat_axis, obs,
+        preserve_units,
+        SVector{naxis, Float64}(unit_scaling_vec),
     )
 end
