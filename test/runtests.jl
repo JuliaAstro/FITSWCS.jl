@@ -486,6 +486,33 @@ end
         @test_throws ArgumentError WCS(bad_axis_hdr)
     end
 
+    @testset "Alternate WCS with preserve_units" begin
+        # Alternate WCS with non-degree CUNIT should respect preserve_units.
+        hdr = Dict(
+            "NAXIS"   => 2,
+            "CTYPE1"  => "RA---TAN",
+            "CTYPE2"  => "DEC--TAN",
+            "CRPIX1"  => 1.0, "CRPIX2" => 1.0,
+            "CRVAL1"  => 83.8221, "CRVAL2" => -5.3911,
+            "CDELT1"  => -2.7778e-4, "CDELT2" => 2.7778e-4,
+            # Alternate A in arcsec
+            "CTYPE1A" => "RA---TAN",
+            "CTYPE2A" => "DEC--TAN",
+            "CRPIX1A" => 1.0, "CRPIX2A" => 1.0,
+            "CRVAL1A" => 7200.0, "CRVAL2A" => 3600.0,
+            "CDELT1A" => 1.0, "CDELT2A" => 1.0,
+            "CUNIT1A" => "arcsec", "CUNIT2A" => "arcsec",
+        )
+        # Default: alternate A returns degrees (canonical).
+        wcs_alt = WCS(hdr; alt='A')
+        @test pixel_to_world(wcs_alt, [1.0, 1.0]) ≈ [2.0, 1.0]
+        # preserve_units=true: alternate A returns arcsec.
+        wcs_alt_pu = WCS(hdr; alt='A', preserve_units=true)
+        world_pu = pixel_to_world(wcs_alt_pu, [1.0, 1.0])
+        @test world_pu ≈ [7200.0, 3600.0]
+        @test world_to_pixel(wcs_alt_pu, SVector{2,Float64}(world_pu...)) ≈ [1.0, 1.0]
+    end
+
     @testset "Celestial units are converted without changing linear axes" begin
         # The public celestial API uses degrees while unrelated axes keep header units.
         hdr = Dict(
@@ -1275,7 +1302,8 @@ end
     @test_throws ArgumentError WCS(Dict("NAXIS"=>1,"CTYPE1"=>"FREQ-XXX",
         "CRPIX1"=>1.0,"CRVAL1"=>1.0,"CDELT1"=>1.0))
 
-    # ── Grism (GRI/GRA): Paper III KPNO Coudé Feed example ───────────────────
+    # ── Grism (GRI/GRA): Paper III KPNO Coude Feed example ───────────────────
+    # Shared grating parameters: G=3.16e5, m=1, alpha=13.9.
     # AWAV-GRA with known grating parameters; linear in grism parameter.
     wcs_grism = WCS(Dict("NAXIS"=>1,"CTYPE1"=>"AWAV-GRA",
         "CRPIX1"=>1801.7,"CRVAL1"=>5225.2,"CDELT1"=>-0.4334,
@@ -1284,9 +1312,8 @@ end
     # At reference pixel, world = reference wavelength in SI (meters).
     world_ref = pixel_to_world(wcs_grism, [1801.7])
     @test world_ref[1] ≈ 5.2252e-7  # 5225.2 Angstrom in meters
-    # Round-trip at reference pixel.
+    # Round-trip at reference and off-reference pixels.
     @test world_to_pixel(wcs_grism, SVector{1,Float64}(world_ref[1])) ≈ [1801.7] atol=1e-6
-    # Off-reference round-trip.
     w2 = pixel_to_world(wcs_grism, [2000.0])
     @test world_to_pixel(wcs_grism, w2) ≈ [2000.0] atol=1e-6
     # preserve_units=true: output in Angstrom.
@@ -1295,6 +1322,72 @@ end
         "CUNIT1"=>"Angstrom",
         "PV1_0"=>3.16e5,"PV1_1"=>1.0,"PV1_2"=>13.9), preserve_units=true)
     @test pixel_to_world(wcs_grism_pu, [1801.7])[1] ≈ 5225.2 atol=1e-6
+
+    # Grism reference-values table (same grating as KPNO Coude).
+    shared_pvs = Dict("PV1_0"=>3.16e5,"PV1_1"=>1.0,"PV1_2"=>13.9)
+    # Test each S-type / algorithm combination.  Expected values from astropy 8.0.1
+    # at pixel positions 1, 2, 3, 10 with a simple reference-pixel CRPIX=1.
+
+    # ── WAVE-GRI: vacuum wavelength ───────────────────────────────────────────
+    wcs_wgri = WCS(merge(Dict("NAXIS"=>1,"CTYPE1"=>"WAVE-GRI",
+        "CRPIX1"=>1.0,"CRVAL1"=>5.2252e-7,"CDELT1"=>-4.334e-11,"CUNIT1"=>"m"),
+        shared_pvs))
+    @test pixel_to_world(wcs_wgri, [1.0])[1] ≈ 5.2252e-7  atol=1e-15
+    @test pixel_to_world(wcs_wgri, [2.0])[1] ≈ 5.224766600224e-7  atol=1e-15
+    @test pixel_to_world(wcs_wgri, [3.0])[1] ≈ 5.224333200897e-7  atol=1e-15
+    w10 = pixel_to_world(wcs_wgri, [10.0])
+    @test world_to_pixel(wcs_wgri, SVector{1,Float64}(w10[1])) ≈ [10.0] atol=1e-9
+
+    # ── FREQ-GRI: frequency from vacuum grism ─────────────────────────────────
+    wcs_fgri = WCS(merge(Dict("NAXIS"=>1,"CTYPE1"=>"FREQ-GRI",
+        "CRPIX1"=>1.0,"CRVAL1"=>5.737e14,"CDELT1"=>-4.758e7,"CUNIT1"=>"Hz",
+        "RESTFRQ"=>5.737e14), shared_pvs))
+    @test pixel_to_world(wcs_fgri, [1.0])[1] ≈ 5.737e14  atol=1.0
+    @test pixel_to_world(wcs_fgri, [2.0])[1] ≈ 5.736999524200e14  rtol=1e-12
+    @test pixel_to_world(wcs_fgri, [3.0])[1] ≈ 5.736999048400e14  rtol=1e-12
+    w10_fgri = pixel_to_world(wcs_fgri, [10.0])
+    @test world_to_pixel(wcs_fgri, SVector{1,Float64}(w10_fgri[1])) ≈ [10.0] atol=1e-8
+
+    # ── FREQ-GRA: frequency from air grism ────────────────────────────────────
+    wcs_fgra = WCS(merge(Dict("NAXIS"=>1,"CTYPE1"=>"FREQ-GRA",
+        "CRPIX1"=>1.0,"CRVAL1"=>5.737e14,"CDELT1"=>-4.758e7,"CUNIT1"=>"Hz",
+        "RESTFRQ"=>5.737e14), shared_pvs))
+    @test pixel_to_world(wcs_fgra, [1.0])[1] ≈ 5.737e14  atol=1e6
+    @test pixel_to_world(wcs_fgra, [2.0])[1] ≈ 5.736999524200e14  rtol=1e-10
+    @test pixel_to_world(wcs_fgra, [3.0])[1] ≈ 5.736999048400e14  rtol=1e-10
+    w10_fgra = pixel_to_world(wcs_fgra, [10.0])
+    @test world_to_pixel(wcs_fgra, SVector{1,Float64}(w10_fgra[1])) ≈ [10.0] atol=1e-6
+
+    # ── VELO-GRI: velocity from vacuum grism ─────────────────────────────────
+    # Precision note: this path involves five non-linear steps (atan, sin, c/λ,
+    # relativistic velocity formula) each contributing ~1 ULP of Float64 roundoff.
+    # The velocity sensitivity dv/dλ ≈ c/λ² ≈ 10²¹ at optical wavelengths amplifies wavelength errors,
+    # so residual differences from astropy on the order of ~1e-7 m/s (sub-ppb)
+    # are not a systematic error.
+    wcs_vgri = WCS(merge(Dict("NAXIS"=>1,"CTYPE1"=>"VELO-GRI",
+        "CRPIX1"=>1.0,"CRVAL1"=>0.0,"CDELT1"=>1000.0,"CUNIT1"=>"m/s",
+        "RESTFRQ"=>5.737e14), shared_pvs))
+    @test pixel_to_world(wcs_vgri, [1.0])[1] ≈ 0.0  atol=1e-10
+    @test pixel_to_world(wcs_vgri, [2.0])[1] ≈ 999.998353  atol=1e-6
+    @test pixel_to_world(wcs_vgri, [3.0])[1] ≈ 1999.993412  atol=1e-6
+    w10_vgri = pixel_to_world(wcs_vgri, [10.0])
+    @test world_to_pixel(wcs_vgri, SVector{1,Float64}(w10_vgri[1])) ≈ [10.0] atol=1e-10
+
+    # ── VELO-GRA: velocity from air grism ────────────────────────────────────
+    # Precision note: inherits the Float64 floor from VELO-GRI plus a systematic
+    # offset from the refractive-index model.  We use IUGG 1999 / Ciddor (1996)
+    # while astropy/wcslib use Cox/Edlen (IAU 1957).  The two differ by a nearly
+    # constant ratio IUGG/Cox ~ 1.000015 across the optical range, producing an
+    # air-wavelength offset of ~7.5e-12 m that propagates through c/lambda and
+    # the relativistic velocity formula to ~0.02--0.05 m/s in the output.  The
+    # residual is a known standards divergence, not a numerical error.
+    wcs_vgra = WCS(merge(Dict("NAXIS"=>1,"CTYPE1"=>"VELO-GRA",
+        "CRPIX1"=>1.0,"CRVAL1"=>0.0,"CDELT1"=>1000.0,"CUNIT1"=>"m/s",
+        "RESTFRQ"=>5.737e14), shared_pvs))
+    @test pixel_to_world(wcs_vgra, [2.0])[1] ≈ 999.998353  atol=0.05
+    @test pixel_to_world(wcs_vgra, [3.0])[1] ≈ 1999.993412 atol=0.06
+    w10_vgra = pixel_to_world(wcs_vgra, [10.0])
+    @test world_to_pixel(wcs_vgra, SVector{1,Float64}(w10_vgra[1])) ≈ [10.0] atol=1e-7
 end
 
 # ──────────────────────────────────────────────────────────────────────────────
