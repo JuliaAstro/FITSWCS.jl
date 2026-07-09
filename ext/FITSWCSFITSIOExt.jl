@@ -3,6 +3,7 @@ module FITSWCSFITSIOExt
 import FITSIO
 import FITSWCS:
     WCS,
+    WCS_all,
     NoAuxiliaryWCSData,
     _auxiliary_wcs_data,
     _external_auxiliary_data,
@@ -89,6 +90,16 @@ end
 function WCS(hdu::FITSIO.HDU; fobj = nothing, alt::Char = ' ', minerr::Real = 0.0)
     # Read the HDU header through FITSIO before using the header adapter.
     return WCS(FITSIO.read_header(hdu); fobj = fobj, alt = alt, minerr = minerr)
+end
+
+function WCS_all(header::FITSIO.FITSHeader; fobj = nothing, minerr::Real = 0.0, preserve_units::Bool = false)
+    # Convert FITSIO header to Dict and delegate to the core parser.
+    return WCS_all(_fitsio_header_dict(header); fobj, minerr, preserve_units)
+end
+
+function WCS_all(hdu::FITSIO.HDU; fobj = nothing, minerr::Real = 0.0, preserve_units::Bool = false)
+    # Read the HDU header through FITSIO before delegating.
+    return WCS_all(FITSIO.read_header(hdu); fobj, minerr, preserve_units)
 end
 
 end # module FITSWCSFITSIOExt
