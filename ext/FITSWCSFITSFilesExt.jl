@@ -3,6 +3,7 @@ module FITSWCSFITSFilesExt
 import FITSFiles
 import FITSWCS:
     WCS,
+    WCS_all,
     NoAuxiliaryWCSData,
     _auxiliary_wcs_data,
     _external_auxiliary_data,
@@ -109,6 +110,16 @@ end
 function WCS(hdu::FITSFiles.HDU; fobj::Union{Nothing, AbstractVector{<:FITSFiles.HDU}} = nothing, alt::Char = ' ', minerr::Real = 0.0)
     # FITSFiles stores parsed header cards directly on each HDU.
     return WCS(hdu.cards; fobj = fobj, alt = alt, minerr = minerr)
+end
+
+function WCS_all(cards::FITSFiles.Cards; fobj::Union{Nothing, AbstractVector{<:FITSFiles.HDU}} = nothing, minerr::Real = 0.0, preserve_units::Bool = false)
+    # Convert FITSFiles cards to Dict and delegate to the core parser.
+    return WCS_all(_fitsfiles_cards_dict(cards); fobj, minerr, preserve_units)
+end
+
+function WCS_all(hdu::FITSFiles.HDU; fobj::Union{Nothing, AbstractVector{<:FITSFiles.HDU}} = nothing, minerr::Real = 0.0, preserve_units::Bool = false)
+    # FITSFiles stores parsed header cards directly on each HDU.
+    return WCS_all(hdu.cards; fobj, minerr, preserve_units)
 end
 
 end # module FITSWCSFITSFilesExt

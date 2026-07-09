@@ -89,6 +89,47 @@ wcs = WCS(2; ctype=["RA---TAN", "DEC--TAN"], crpix=[512.0, 512.0],
 Supported keywords: `crpix`, `crval`, `cdelt`, `ctype`, `cunit`, `pc`, `cd`,
 `crota`, `lonpole`, `latpole`, `radesys`, `equinox`, `wcsname`, `preserve_units`.
 
+## Multiple Alternate WCS
+
+A single FITS header can carry several independent WCS descriptions
+distinguished by a trailing character appended to the keyword names
+(`CTYPE1A`, `CRVAL1A`, etc.).  The primary WCS uses no suffix.
+This is commonly used to provide the same image in different coordinate
+systems — for example, equatorial and galactic — or a spectral axis in
+both frequency and wavelength.
+
+Call `WCS_all(header)` to parse every valid alternate at once, or
+`WCS(header; alt='A')` for a single alternate.  `wcsalts(header)`
+returns the list of alternate characters present without constructing
+the transforms.  If one alternate is malformed it is skipped with a
+warning rather than aborting the full set.
+
+```julia
+hdr = Dict(
+    "NAXIS"   => 2,
+    # Primary: equatorial TAN projection.
+    "CTYPE1"  => "RA---TAN",
+    "CTYPE2"  => "DEC--TAN",
+    "CRPIX1"  => 512.0, "CRPIX2" => 512.0,
+    "CRVAL1"  => 266.405, "CRVAL2" => -28.936,
+    "CDELT1"  => -2.7778e-4, "CDELT2" => 2.7778e-4,
+    # Alternate A: galactic TAN projection.
+    "CTYPE1A" => "GLON-TAN",
+    "CTYPE2A" => "GLAT-TAN",
+    "CRPIX1A" => 512.0, "CRPIX2A" => 512.0,
+    "CRVAL1A" => 0.0, "CRVAL2A" => 0.0,
+    "CDELT1A" => -2.7778e-4, "CDELT2A" => 2.7778e-4,
+)
+
+# Build all alternates at once.
+all_wcs = WCS_all(hdr)
+
+# Primary (' ') and alternate A give different world coordinates
+# for the same pixel — two labels for the same sky position.
+eq  = pixel_to_world(all_wcs[' '], [512.0, 512.0])  # [266.405, -28.936]
+gal = pixel_to_world(all_wcs['A'], [512.0, 512.0])  # [0.0, 0.0]
+```
+
 ## Supported Header Keywords
 
 The parser currently supports these image-WCS keyword families:
@@ -96,7 +137,7 @@ The parser currently supports these image-WCS keyword families:
 - axis count: `NAXIS`, `WCSAXES`
 - per-axis values: `CTYPEi`, `CUNITi`, `CRPIXi`, `CRVALi`, `CDELTi`
 - linear transforms: `PCi_ja`, `CDi_ja`, and legacy `CROTA2`
-- alternate WCS suffixes through `WCS(header; alt='A')`
+- alternate WCS suffixes through `WCS(header; alt='A')` and `WCS_all(header)`
 - celestial pole keywords: `LONPOLE`, `LATPOLE`
 - projection parameters used by implemented projections, including:
   `PV<lat>_1`, `PV<lat>_2`, `PV<lat>_3`, `PV<lat>_0..30` for `ZPN`, and

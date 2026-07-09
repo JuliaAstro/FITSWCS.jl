@@ -533,6 +533,139 @@ end
 end
 
 # ──────────────────────────────────────────────────────────────────────────────
+@testset "WCS_all multi-alternate parsing" begin
+
+    @testset "Equatorial and galactic alternates share pixel grid" begin
+        # Typical real-world use: the same image expressed in different
+        # celestial coordinate systems.  Both alternates share the same
+        # pixel grid (CRPIX, CDELT) and projection (TAN); only CRVAL and
+        # CTYPE differ.  The reference pixel is the galactic center.
+        # I haven't done the extra work to make sure the projections
+        # are actually equivalent off the reference point; this is mostly
+        # a parsing test.
+        ra0  = 266.4049882865448   # ICRS RA of (GLON, GLAT) = (0, 0)
+        dec0 = -28.93617776179147  # ICRS Dec of (GLON, GLAT) = (0, 0)
+
+        hdr = Dict(
+            "NAXIS"   => 2,
+            # Primary: equatorial (ICRS).
+            "CTYPE1"  => "RA---TAN",
+            "CTYPE2"  => "DEC--TAN",
+            "CRPIX1"  => 512.0, "CRPIX2" => 512.0,
+            "CRVAL1"  => ra0, "CRVAL2" => dec0,
+            "CDELT1"  => -2.7778e-4, "CDELT2" => 2.7778e-4,
+            # Alternate A: galactic.
+            "CTYPE1A" => "GLON-TAN",
+            "CTYPE2A" => "GLAT-TAN",
+            "CRPIX1A" => 512.0, "CRPIX2A" => 512.0,
+            "CRVAL1A" => 0.0, "CRVAL2A" => 0.0,
+            "CDELT1A" => -2.7778e-4, "CDELT2A" => 2.7778e-4,
+        )
+
+        all_wcs = WCS_all(hdr)
+        @test length(all_wcs) == 2
+        @test haskey(all_wcs, ' ')
+        @test haskey(all_wcs, 'A')
+
+        eq = all_wcs[' ']
+        gal = all_wcs['A']
+
+        # Different coordinate system prefixes, same projection.
+        @test eq.ctype == ["RA---TAN", "DEC--TAN"]
+        @test gal.ctype  == ["GLON-TAN", "GLAT-TAN"]
+        @test eq.projection isa TAN
+        @test gal.projection isa TAN
+
+        # Same pixel grid in both alternates.
+        @test eq.crpix == gal.crpix == [512.0, 512.0]
+
+        # At the reference pixel, each gives its own CRVAL.
+        pix_ref = [512.0, 512.0]
+        world_eq = pixel_to_world(eq, pix_ref)
+        world_gal = pixel_to_world(gal, pix_ref)
+        @test world_eq ≈ [ra0, dec0]
+        @test world_gal ≈ [0.0, 0.0]  atol=1e-12
+
+        # Off-reference, world coordinates differ numerically because they
+        # are expressed in different celestial systems. I think with these
+        # particular values, the off-reference pixels are not exactly the same
+        # in the two systems, but good enough for a parsing test.
+        pix = [600.0, 600.0]
+        w_eq = pixel_to_world(eq, pix)
+        w_gal = pixel_to_world(gal, pix)
+        @test w_eq != w_gal
+
+        # Each alternate round-trips independently.
+        @test world_to_pixel(eq, w_eq) ≈ pix
+        @test world_to_pixel(gal, w_gal) ≈ pix
+    end
+
+    @testset "Malformed alternate is skipped with warning" begin
+        # Alternate A has a mismatched axis count in its CD matrix.
+        hdr = Dict(
+            "NAXIS"   => 2,
+            "CTYPE1"  => "RA---TAN",
+            "CTYPE2"  => "DEC--TAN",
+            "CRPIX1"  => 1.0, "CRPIX2" => 1.0,
+            "CRVAL1"  => 0.0, "CRVAL2" => 0.0,
+            "CDELT1"  => -1e-4, "CDELT2" => 1e-4,
+            # Alternate B: valid SIN.
+            "CTYPE1B" => "RA---SIN",
+            "CTYPE2B" => "DEC--SIN",
+            "CRPIX1B" => 1.0, "CRPIX2B" => 1.0,
+            "CRVAL1B" => 0.0, "CRVAL2B" => 0.0,
+            "CDELT1B" => -1e-4, "CDELT2B" => 1e-4,
+            # Alternate C: malformed — mismatched projection codes.
+            "CTYPE1C" => "RA---TAN",
+            "CTYPE2C" => "DEC--SIN",
+            "CRPIX1C" => 1.0, "CRPIX2C" => 1.0,
+            "CRVAL1C" => 0.0, "CRVAL2C" => 0.0,
+            "CDELT1C" => -1e-4, "CDELT2C" => 1e-4,
+        )
+
+        # The malformed alternate C should be skipped with a warning.
+        all_wcs = @test_logs (:warn, r"Skipping alternate 'C'") WCS_all(hdr)
+
+        # Primary and alternate B are valid; alternate C was skipped.
+        @test length(all_wcs) == 2
+        @test haskey(all_wcs, ' ')
+        @test haskey(all_wcs, 'B')
+        @test !haskey(all_wcs, 'C')
+        @test all_wcs[' '].projection isa TAN
+        @test all_wcs['B'].projection isa SIN
+    end
+
+    @testset "Empty result for header with no WCS keywords" begin
+        @test isempty(WCS_all(Dict{String, Any}()))
+    end
+
+    @testset "WCS_all passes fobj to each alternate" begin
+        # TAB axes require external data; fobj must be shared across alternates.
+        hdr = Dict(
+            "NAXIS"  => 1,
+            "CTYPE1" => "FREQ-TAB",
+            "PS1_0"  => "WCS-TABLE",
+            "PS1_1"  => "FREQS",
+            # Alternate A has the same shape.
+            "CTYPE1A" => "FREQ-TAB",
+            "PS1_0A"  => "WCS-TABLE",
+            "PS1_1A"  => "FREQS",
+        )
+        # Header-only: both alternates reference external table data.
+        # Each should issue a warning and be skipped, yielding an empty dict.
+        result_no_fobj = @test_logs (:warn, r"Skipping primary WCS") (:warn, r"Skipping alternate 'A' WCS") WCS_all(hdr)
+        @test isempty(result_no_fobj)
+
+        # With fobj=FakeTabularFobj(), both alternates should parse.
+        result_with_fobj = WCS_all(hdr; fobj=FakeTabularFobj())
+        @test length(result_with_fobj) == 2
+        @test haskey(result_with_fobj, ' ')
+        @test haskey(result_with_fobj, 'A')
+    end
+
+end
+
+# ──────────────────────────────────────────────────────────────────────────────
 @testset "SIP distortion" begin
 
     @testset "Header parsing builds coefficient matrices" begin

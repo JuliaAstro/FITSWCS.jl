@@ -61,6 +61,6 @@ include("parsing.jl")
 include("linear.jl")
 include("transforms.jl")
 
-export WCS, WCSTransform, pixel_to_world, world_to_pixel
+export WCS, WCSTransform, pixel_to_world, world_to_pixel, wcsalts, WCS_all
 
 end # module FITSWCS

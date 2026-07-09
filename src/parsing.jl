@@ -1176,3 +1176,58 @@ function _put_matrix_values!(header::Dict{String,Any},
 
     return header
 end
+
+# ── Constructor to retrieve all alt WCS ────────────────
+"""
+    wcsalts(hdr) -> Vector{Char}
+
+Return the WCS coordinate-system version characters actually present in a FITS
+header. The primary system (`' '`) is included only if primary WCS keywords are
+present; alternate systems `A`–`Z` are detected from a trailing letter on the
+core per-axis keywords (e.g. `CTYPE1A`, `CRVAL2B`). The result is sorted, so the
+primary (if any) comes first. An empty result means the header carries no WCS.
+"""
+const _WCS_ALT_KEY_RE = r"^(?:CTYPE|CRVAL|CRPIX|CDELT|CUNIT|CROTA)\d+([A-Z]?)$"
+function wcsalts(hdr)
+    alts = Set{Char}()
+    for key in keys(hdr)
+        m = match(_WCS_ALT_KEY_RE, uppercase(String(key)))
+        m === nothing && continue
+        suffix = m.captures[1]
+        push!(alts, isempty(suffix) ? ' ' : suffix[1])
+    end
+    # ' ' (0x20) sorts before 'A'–'Z', so the primary comes first when present.
+    return sort!(collect(alts))
+end
+
+"""
+    WCS_all(header; fobj=nothing, minerr=0.0, preserve_units=false) -> Dict{Char, WCSTransform}
+
+Parse every WCS alternate present in `header` into a `Dict` keyed by alternate
+character.  The primary WCS (if any) is keyed by `' '`.  Alternates are keyed
+by `'A'`–`'Z'`.
+
+`fobj`, `minerr`, and `preserve_units` are passed through to `WCS()` for each
+alternate.  The same `fobj` is shared across all alternates.
+
+If a particular alternate fails to parse, a warning is emitted and that
+alternate is omitted from the result rather than aborting the full set.
+If no valid WCS alternates are found, an empty `Dict` is returned.
+
+Use `wcsalts(header)` to discover which alternates are present without
+constructing the transforms.
+"""
+function WCS_all(header::AbstractDict; fobj = nothing, minerr::Real = 0.0, preserve_units::Bool = false)
+    alts = wcsalts(header)
+    result = Dict{Char, WCSTransform}()
+    sizehint!(result, length(alts))
+    for a in alts
+        try
+            result[a] = WCS(header; fobj, alt = a, minerr, preserve_units)
+        catch e
+            alt_label = a == ' ' ? "primary" : "alternate '$a'"
+            @warn "Skipping $alt_label WCS" exception = e
+        end
+    end
+    return result
+end
