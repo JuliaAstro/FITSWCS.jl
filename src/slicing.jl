@@ -126,12 +126,21 @@ function slice_wcs(wcs::WCSTransform{N}, slices::Vararg{Any, M}) where {N, M}
     end
     dropped_world_values = pixel_to_world(wcs, nominal_pixel)
 
-    # Materialize static storage for the keep vectors.
+    # Function barrier: Val(Np) and Val(Nw) let the compiler specialize
+    # SVector construction for the exact sizes, avoiding type instability.
+    return _construct_sliced(wcs, normalized, pixel_keep, world_keep,
+                             dropped_world_values, Val(Np), Val(Nw))
+end
+
+function _construct_sliced(wcs::WCSTransform{N}, normalized::S,
+                                   pixel_keep::Vector{Int},
+                                   world_keep::Vector{Int},
+                                   dropped_world_values::AbstractVector,
+                                   ::Val{Np}, ::Val{Nw}) where {N, Np, Nw, S}
     pk = SVector{Np, Int}(pixel_keep)
     wk = SVector{Nw, Int}(world_keep)
     dwv = SVector{N, Float64}(ntuple(i -> dropped_world_values[i], N))
-
-    return SlicedWCSTransform{N, Np, Nw, typeof(normalized), typeof(wcs)}(
+    return SlicedWCSTransform{N, Np, Nw, S, typeof(wcs)}(
         wcs, normalized, pk, wk, dwv
     )
 end
@@ -160,12 +169,12 @@ end
 # AbstractWCSTransform and the single-coordinate method on SlicedWCSTransform.
 # Resolve by forwarding to the generic batch implementation.
 function pixel_to_world(swcs::SlicedWCSTransform,
-                         pixels::AbstractVector{<:AbstractVector})
+                        pixels::AbstractVector{<:AbstractVector})
     return invoke(pixel_to_world,
                   Tuple{AbstractWCSTransform, typeof(pixels)}, swcs, pixels)
 end
 function world_to_pixel(swcs::SlicedWCSTransform,
-                         worlds::AbstractVector{<:AbstractVector})
+                        worlds::AbstractVector{<:AbstractVector})
     return invoke(world_to_pixel,
                   Tuple{AbstractWCSTransform, typeof(worlds)}, swcs, worlds)
 end
