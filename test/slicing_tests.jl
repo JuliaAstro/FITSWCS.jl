@@ -607,6 +607,171 @@ end
         @test world ≈ [7200.0, 3600.0]
         @test world_to_pixel(swcs, world) ≈ [1.0, 1.0]
     end
+
+    @testset "preserve_units with step and drop" begin
+        hdr = Dict(
+            "NAXIS"  => 2,
+            "CTYPE1" => "X", "CTYPE2" => "Y",
+            "CRPIX1" => 1.0, "CRPIX2" => 1.0,
+            "CRVAL1" => 7200.0, "CRVAL2" => 3600.0,
+            "CDELT1" => 1.0, "CDELT2" => 1.0,
+            "CUNIT1" => "arcsec", "CUNIT2" => "arcsec",
+        )
+        wcs_pu = WCS(hdr; preserve_units = true)
+        # Step on axis 1, drop axis 2.  Independent axes: world_n_dim becomes 1.
+        swcs = slice_wcs(wcs_pu, 2:2:10, 5)
+        @test pixel_n_dim(swcs) == 1
+        @test world_n_dim(swcs) == 1
+        # pixel 2 in sliced → orig pixel 4.  X = 7200 + 1*(4-1) = 7203 arcsec.
+        world = pixel_to_world(swcs, [2.0])
+        @test world ≈ [7203.0]
+        @test world_to_pixel(swcs, world) ≈ [2.0]
+    end
+
+    @testset "preserve_units through recursive slicing" begin
+        hdr = Dict(
+            "NAXIS"  => 2,
+            "CTYPE1" => "X", "CTYPE2" => "Y",
+            "CRPIX1" => 1.0, "CRPIX2" => 1.0,
+            "CRVAL1" => 7200.0, "CRVAL2" => 3600.0,
+            "CDELT1" => 1.0, "CDELT2" => 1.0,
+            "CUNIT1" => "arcsec", "CUNIT2" => "arcsec",
+        )
+        wcs_pu = WCS(hdr; preserve_units = true)
+        swcs1 = slice_wcs(wcs_pu, 2:20, 2:20)
+        swcs2 = slice_wcs(swcs1, 3:8, 4:9)
+        @test swcs2.parent === wcs_pu
+        world = pixel_to_world(swcs2, [1.0, 1.0])
+        # pixel (1,1) → orig (4,5).
+        @test world[1] ≈ 7203.0 atol=1e-10
+        @test world[2] ≈ 3604.0 atol=1e-10
+        @test world_to_pixel(swcs2, world) ≈ [1.0, 1.0]
+    end
+end
+
+@testset "PC matrix with off-diagonal elements" begin
+    hdr = Dict(
+        "NAXIS"  => 2,
+        "CTYPE1" => "X", "CTYPE2" => "Y",
+        "CRPIX1" => 10.0, "CRPIX2" => 10.0,
+        "CRVAL1" => 100.0, "CRVAL2" => 200.0,
+        "CDELT1" => 2.0, "CDELT2" => 3.0,
+        "PC1_1"  => 1.0, "PC1_2" => 0.5,
+        "PC2_1"  => 0.5, "PC2_2" => 1.0,
+    )
+    wcs = WCS(hdr)
+    corr = axis_correlation_matrix(wcs)
+    @test corr == Bool[1 1; 1 1]  # CD = CDELT * PC couples all axes
+
+    swcs = slice_wcs(wcs, 3:9, 5:15)
+    for pix in ([1.0, 1.0], [4.0, 3.0], [20.0, 70.0])
+        world = pixel_to_world(swcs, pix)
+        @test world_to_pixel(swcs, world) ≈ pix
+    end
+end
+
+@testset "TAB and spectral slicing" begin
+    @testset "TAB axis round-trip" begin
+        hdr = Dict(
+            "NAXIS"  => 1,
+            "CTYPE1" => "FREQ-TAB",
+            "CRPIX1" => 1.0,
+            "CRVAL1" => 1.0,
+            "CDELT1" => 1.0,
+            "PS1_0"  => "WCS-TABLE",
+            "PS1_1"  => "FREQS",
+        )
+        wcs = WCS(hdr; fobj = FakeTabularFobj())
+        swcs = slice_wcs(wcs, 1:3)
+        for pix in ([1.0], [1.5], [2.5])
+            world = pixel_to_world(swcs, pix)
+            @test world_to_pixel(swcs, world) ≈ pix atol=1e-10
+        end
+    end
+
+    @testset "Spectral WAVE-F2W round-trip" begin
+        wcs = WCS(Dict(
+            "NAXIS"=>1, "CTYPE1"=>"WAVE-F2W",
+            "CRPIX1"=>1.0, "CRVAL1"=>0.211, 
+            "CDELT1"=>0.001, "CUNIT1"=>"m",
+        ))
+        swcs = slice_wcs(wcs, 1:5)
+        for pix in ([1.0], [3.0], [50.0])
+            world = pixel_to_world(swcs, pix)
+            @test world_to_pixel(swcs, world) ≈ pix atol=1e-8
+        end
+    end
+end
+
+# ──────────────────────────────────────────────────────────────────────────────
+@testset "Paper IV lookup table slicing" begin
+    @testset "D2IM and CPDIS round-trip" begin
+        hdr = Dict{String,Any}(
+            "NAXIS"  => 2,
+            "CTYPE1" => "RA---TAN", "CTYPE2" => "DEC--TAN",
+            "CRPIX1" => 1.0, "CRPIX2" => 1.0,
+            "CRVAL1" => 0.0, "CRVAL2" => 0.0,
+            "CDELT1" => 1.0, "CDELT2" => 1.0,
+            "CPDIS1" => "LOOKUP",
+            "D2IMDIS2" => "LOOKUP",
+        )
+        wcs = WCS(hdr; fobj = FakeLookupFobj())
+        swcs = slice_wcs(wcs, 30:50, 70:100)
+        for pix in ([1.0, 1.0], [2.0, 2.0], [20.0, 50.0])
+            world = pixel_to_world(swcs, pix)
+            @test world_to_pixel(swcs, world) ≈ pix atol=1e-8
+        end
+    end
+
+    @testset "CPDIS interpolation only" begin
+        hdr = Dict{String,Any}(
+            "NAXIS"  => 2,
+            "CTYPE1" => "RA---TAN", "CTYPE2" => "DEC--TAN",
+            "CRPIX1" => 1.0, "CRPIX2" => 1.0,
+            "CRVAL1" => 0.0, "CRVAL2" => 0.0,
+            "CDELT1" => 1.0, "CDELT2" => 1.0,
+            "CPDIS1" => "LOOKUP",
+            "CPDIS2" => "LOOKUP",
+        )
+        wcs = WCS(hdr; fobj = FakeCPDISInterpolationFobj())
+        swcs = slice_wcs(wcs, 10:25, 15:25)
+        pix = [1.0, 1.0]
+        world = pixel_to_world(swcs, pix)
+        @test world_to_pixel(swcs, world) ≈ pix atol=1e-6
+    end
+end
+
+# ──────────────────────────────────────────────────────────────────────────────
+@testset "_compose_slices unit tests" begin
+    @testset "KeepAll compositions" begin
+        @test FITSWCS._compose_slices(FITSWCS.KeepAll(), Colon()) isa FITSWCS.KeepAll
+        @test FITSWCS._compose_slices(FITSWCS.KeepAll(), 5) == FITSWCS.DropAxis(5.0)
+        @test FITSWCS._compose_slices(FITSWCS.KeepAll(), 3:7) == FITSWCS.KeepRange(3:7)
+    end
+
+    @testset "KeepRange compositions" begin
+        old = FITSWCS.KeepRange(10:2:20)  # a1=10, s1=2
+        # Colon → identity.
+        @test FITSWCS._compose_slices(old, Colon()) === old
+        # Integer → drop at mapped position.
+        result = FITSWCS._compose_slices(old, 3)
+        @test result isa FITSWCS.DropAxis
+        @test result.pixel == 14.0  # 10 + 2*(3-1) = 14
+        # Range on range.
+        new = 3:5  # a2=3, s2=1
+        result = FITSWCS._compose_slices(old, new)
+        @test result isa FITSWCS.KeepRange
+        @test first(result.range) == 14  # 10 + 2*(3-1) = 14
+        @test step(result.range) == 2    # 2*1 = 2
+        @test length(result.range) == 3
+        # Step on step.
+        old2 = FITSWCS.KeepRange(10:4:30)  # elements: [10,14,18,22,26,30], s1=4
+        new2 = 1:2:3  # elements: [1,3], s2=2
+        result2 = FITSWCS._compose_slices(old2, new2)
+        @test first(result2.range) == 10  # 10 + 4*(1-1) = 10
+        @test step(result2.range) == 8    # 4*2 = 8
+        @test length(result2.range) == 2  # length(new2) = 2
+    end
 end
 
 end # @testset "WCS Slicing"
