@@ -14,6 +14,7 @@ Sentinel indicating a pixel axis is kept unchanged (no offset, no stride).
 Equivalent to `:` in array-slicing notation.
 """
 struct KeepAll end
+_is_kept(::KeepAll) = true
 
 """
     KeepRange{R}(range::AbstractRange)
@@ -25,6 +26,7 @@ image to `first(range)` in the original image, with `step(range)` stride.
 struct KeepRange{R <: AbstractRange}
     range::R
 end
+_is_kept(::KeepRange) = true
 
 """
     DropAxis{Float64}(pixel::Float64)
@@ -34,6 +36,15 @@ A dropped pixel axis fixed at `pixel` in the original image.
 struct DropAxis
     pixel::Float64
 end
+_is_kept(::DropAxis) = false
+
+"""Normalize a slice argument (Colon, Integer, or AbstractRange) into `KeepAll`, `KeepRange`, or `DropAxis`."""
+_normalize_slice(::Colon) = KeepAll()
+_normalize_slice(s::Integer) = DropAxis(Float64(s))
+_normalize_slice(s::AbstractRange) = KeepRange(s)
+_normalize_slice(s) = throw(ArgumentError(
+    "slice must be an Integer, AbstractRange, or Colon, got $(typeof(s))"
+))
 
 # ── Sliced WCS transform ────────────────────────────────────────────────────────
 
@@ -97,10 +108,10 @@ function slice_wcs(wcs::WCSTransform{N}, slices::Vararg{Any, M}) where {N, M}
         padded = slices
     end
     # Normalize each slice to KeepAll, KeepRange, or DropAxis.
-    normalized = _normalize_slices(padded)
+    normalized = _normalize_slice.(padded)
 
     # Determine which pixel axes are kept.
-    pixel_keep = Int[i for (i, s) in enumerate(normalized) if s isa Union{KeepAll, KeepRange}]
+    pixel_keep = Int[i for (i, s) in enumerate(normalized) if _is_kept(s)]
     Np = length(pixel_keep)
     Np > 0 || throw(ArgumentError("All pixel axes were dropped; a WCS must have at least one pixel axis"))
 
@@ -124,7 +135,7 @@ function slice_wcs(wcs::WCSTransform{N}, slices::Vararg{Any, M}) where {N, M}
             nominal_pixel[i] = wcs.crpix[i]
         end
     end
-    dropped_world_values = pixel_to_world(wcs, nominal_pixel)
+    dropped_world_values = pixel_to_world(wcs, SVector{N, Float64}(nominal_pixel))
 
     # Function barrier: Val(Np) and Val(Nw) let the compiler specialize
     # SVector construction for the exact sizes, avoiding type instability.
@@ -143,24 +154,6 @@ function _construct_sliced(wcs::WCSTransform{N}, normalized::S,
     return SlicedWCSTransform{N, Np, Nw, S, typeof(wcs)}(
         wcs, normalized, pk, wk, dwv
     )
-end
-
-"""Normalize a tuple of slice arguments into `KeepAll`, `KeepRange`, or `DropAxis`."""
-function _normalize_slices(slices::Tuple)
-    return ntuple(length(slices)) do i
-        s = slices[i]
-        if s isa Colon
-            KeepAll()
-        elseif s isa Integer
-            DropAxis(Float64(s))
-        elseif s isa AbstractRange
-            KeepRange(s)
-        else
-            throw(ArgumentError(
-                "slice argument $i must be an Integer, AbstractRange, or Colon, got $(typeof(s))"
-            ))
-        end
-    end
 end
 
 # ── Disambiguation: batch vector-of-vectors vs single-coordinate AbstractVector ─
