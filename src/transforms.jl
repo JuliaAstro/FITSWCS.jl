@@ -255,10 +255,17 @@ function pixel_to_world(wcs::WCSTransform, pixel::AbstractVector)
 end
 
 # Convenience: accept tuples, static-array-likes, and scalar varargs.
-pixel_to_world(wcs::WCSTransform, pixel::Tuple{Vararg{Real}}) =
+pixel_to_world(wcs::AbstractWCSTransform, pixel::Tuple{Vararg{Real}}) =
     pixel_to_world(wcs, _coordinate_vector(pixel))
-pixel_to_world(wcs::WCSTransform, coords::Real...) =
+pixel_to_world(wcs::AbstractWCSTransform, coords::Real...) =
     pixel_to_world(wcs, _coordinate_vector(coords))
+
+# Disambiguation: a Vector{<:AbstractVector} matches both the single-coordinate
+# method (::WCSTransform, ::AbstractVector) and the batch method
+# (::AbstractWCSTransform, ::AbstractVector{<:AbstractVector}).
+pixel_to_world(wcs::WCSTransform, pixels::AbstractVector{<:AbstractVector}) =
+    invoke(pixel_to_world,
+           Tuple{AbstractWCSTransform, typeof(pixels)}, wcs, pixels)
 
 """
     world_to_pixel(wcs, world) -> pixel
@@ -322,10 +329,15 @@ function world_to_pixel(wcs::WCSTransform{N}, world::AbstractVector) where {N}
     end
 end
 
-world_to_pixel(wcs::WCSTransform, world::Tuple{Vararg{Real}}) =
+world_to_pixel(wcs::AbstractWCSTransform, world::Tuple{Vararg{Real}}) =
     world_to_pixel(wcs, _coordinate_vector(world))
-world_to_pixel(wcs::WCSTransform, coords::Real...) =
+world_to_pixel(wcs::AbstractWCSTransform, coords::Real...) =
     world_to_pixel(wcs, _coordinate_vector(coords))
+
+# Disambiguation for vector-of-vectors batch vs single-coordinate.
+world_to_pixel(wcs::WCSTransform, worlds::AbstractVector{<:AbstractVector}) =
+    invoke(world_to_pixel,
+           Tuple{AbstractWCSTransform, typeof(worlds)}, wcs, worlds)
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Batch transforms
@@ -339,12 +351,13 @@ Batched pixel-to-world transform.
 `pixels` must be an `naxis × N` matrix where each column is one pixel
 coordinate.  Returns an `naxis × N` floating-point matrix of world coordinates.
 """
-function pixel_to_world(wcs::WCSTransform, pixels::AbstractMatrix)
-    naxis, N = size(pixels)
-    naxis == wcs.naxis ||
-        throw(DimensionMismatch("pixels has $(naxis) rows, expected $(wcs.naxis)"))
+function pixel_to_world(wcs::AbstractWCSTransform, pixels::AbstractMatrix)
+    pix_ndim = pixel_n_dim(wcs)
+    nrows, N = size(pixels)
+    nrows == pix_ndim ||
+        throw(DimensionMismatch("pixels has $(nrows) rows, expected $pix_ndim"))
     T = _float_type(eltype(pixels))
-    world = Matrix{T}(undef, naxis, N)
+    world = Matrix{T}(undef, pix_ndim, N)
     Threads.@threads for k in axes(pixels, 2)
         world[:, k] = pixel_to_world(wcs, view(pixels, :, k))
     end
@@ -356,12 +369,12 @@ end
 
 Convenience batch transform for a vector of individual pixel coordinates.
 """
-function pixel_to_world(wcs::WCSTransform, pixels::AbstractVector{<:AbstractVector})
-    naxis = wcs.naxis
-    naxis == length(pixels[1]) ||
-        throw(DimensionMismatch("pixels have length $(length(pixels[1])), expected $(wcs.naxis)"))
+function pixel_to_world(wcs::AbstractWCSTransform, pixels::AbstractVector{<:AbstractVector})
+    pix_ndim = pixel_n_dim(wcs)
+    pix_ndim == length(pixels[1]) ||
+        throw(DimensionMismatch("pixels have length $(length(pixels[1])), expected $pix_ndim"))
     T = _float_type(eltype(eltype(pixels)))
-    world = Matrix{T}(undef, naxis, length(pixels))
+    world = Matrix{T}(undef, pix_ndim, length(pixels))
     Threads.@threads for k in eachindex(pixels)
         world[:, k] = pixel_to_world(wcs, pixels[k])
     end
@@ -376,12 +389,14 @@ Batched world-to-pixel transform.
 `worlds` must be an `naxis × N` matrix where each column is one world
 coordinate.  Returns an `naxis × N` floating-point matrix of pixel coordinates.
 """
-function world_to_pixel(wcs::WCSTransform, worlds::AbstractMatrix)
-    naxis, N = size(worlds)
-    naxis == wcs.naxis ||
-        throw(DimensionMismatch("worlds has $(naxis) rows, expected $(wcs.naxis)"))
+function world_to_pixel(wcs::AbstractWCSTransform, worlds::AbstractMatrix)
+    world_ndim = world_n_dim(wcs)
+    pix_ndim = pixel_n_dim(wcs)
+    nrows, N = size(worlds)
+    nrows == world_ndim ||
+        throw(DimensionMismatch("worlds has $(nrows) rows, expected $world_ndim"))
     T = _float_type(eltype(worlds))
-    pixels = Matrix{T}(undef, naxis, N)
+    pixels = Matrix{T}(undef, pix_ndim, N)
     Threads.@threads for k in axes(worlds, 2)
         pixels[:, k] = world_to_pixel(wcs, view(worlds, :, k))
     end
@@ -393,12 +408,13 @@ end
 
 Convenience batch transform for a vector of individual world coordinates.
 """
-function world_to_pixel(wcs::WCSTransform, worlds::AbstractVector{<:AbstractVector})
-    naxis = wcs.naxis
-    naxis == length(worlds[1]) ||
-        throw(DimensionMismatch("worlds have length $(length(worlds[1])), expected $(wcs.naxis)"))
+function world_to_pixel(wcs::AbstractWCSTransform, worlds::AbstractVector{<:AbstractVector})
+    world_ndim = world_n_dim(wcs)
+    pix_ndim = pixel_n_dim(wcs)
+    world_ndim == length(worlds[1]) ||
+        throw(DimensionMismatch("worlds have length $(length(worlds[1])), expected $world_ndim"))
     T = _float_type(eltype(eltype(worlds)))
-    pixels = Matrix{T}(undef, naxis, length(worlds))
+    pixels = Matrix{T}(undef, pix_ndim, length(worlds))
     Threads.@threads for k in eachindex(worlds)
         pixels[:, k] = world_to_pixel(wcs, worlds[k])
     end
