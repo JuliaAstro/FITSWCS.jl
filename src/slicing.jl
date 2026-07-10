@@ -82,6 +82,7 @@ end
 
 # ── Constructor ─────────────────────────────────────────────────────────────────
 
+# TODO: Support slice_wcs on SlicedWCSTransform (compose slices)
 """
     slice_wcs(wcs::WCSTransform, slices...) -> SlicedWCSTransform
 

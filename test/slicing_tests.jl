@@ -217,6 +217,11 @@ end
         world = pixel_to_world(swcs, [512.0, 512.0])
         @test world ≈ [83.8221, -5.3911]
         @test world_to_pixel(swcs, world) ≈ [512.0, 512.0] atol=1e-10
+
+        # Should round-trip off-reference pixels.
+        swcs = slice_wcs(wcs, 10:1024, 15:1024, 20:100)
+        @test pixel_to_world(wcs, [800.0, 900.0, 100.0]) ≈ pixel_to_world(swcs, [800.0 - 10 + 1, 900.0 - 15 + 1, 100.0 - 20 + 1]) atol=1e-10
+        @test world_to_pixel(wcs, [83.8, -5.4, 1.42e9]) ≈ (world_to_pixel(swcs, [83.8, -5.4, 1.42e9]) .+ [10.0 - 1, 15.0 - 1, 20.0 - 1]) atol=1e-10
     end
 
     @testset "2D celestial: spatial cutout" begin
@@ -235,6 +240,11 @@ end
         world = pixel_to_world(swcs, pix_ref)
         @test world ≈ [83.8221, -5.3911] atol=1e-10
         @test world_to_pixel(swcs, world) ≈ pix_ref atol=1e-10
+
+        # Off reference pixel
+        swcs = slice_wcs(wcs, 100:200, 300:400)
+        @test pixel_to_world(wcs, [150.0, 350.0]) ≈ pixel_to_world(swcs, [150.0 - 100 + 1, 350.0 - 300 + 1]) atol=1e-10
+        @test world_to_pixel(wcs, [83.8, -5.4]) ≈ (world_to_pixel(swcs, [83.8, -5.4]) .+ [100.0 - 1, 300.0 - 1]) atol=1e-10
     end
 
     @testset "Coupled rotated 2D: drop one axis → both world axes survive" begin
@@ -256,7 +266,7 @@ end
         @test world ≈ [100.0, 200.0]
         @test world_to_pixel(swcs, world) ≈ [10.0]
     end
-    
+
     @testset "Drop both celestial axes: extract 1D spectrum at a spatial pixel" begin
         hdr = Dict(
             "NAXIS"  => 3,
