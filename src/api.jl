@@ -2,7 +2,6 @@
 Ancillary API functions for WCS transforms, including dimensionality accessors and axis correlation matrix computation.
 """
 
-
 # ── Dimensionality accessors ────────────────────────────────────────────────────
 
 """
@@ -41,26 +40,22 @@ function axis_correlation_matrix(wcs::WCSTransform{N}) where {N}
         return fill(true, SMatrix{N, N, Bool})
     end
 
-    # Base coupling from the CD matrix: world axis i depends on pixel axis j
-    # if CD[i,j] is non-zero.  Convert to mutable BitMatrix so we can mutate
-    # rows for celestial sharing below.
-    matrix = MMatrix{N, N, Bool}(ntuple(k -> begin
+    li = wcs.lon_axis
+    la = wcs.lat_axis
+    has_celestial = li > 0 && la > 0
+
+    # Build the correlation SMatrix in one pass.  For celestial axes the
+    # longitude and latitude share pixel dependencies (spherical rotation
+    # couples them), so those rows take the union of the CD-based booleans.
+    return SMatrix{N, N, Bool}(ntuple(k -> begin
         i = (k - 1) ÷ N + 1
         j = (k - 1) % N + 1
-        wcs.cd[i, j] != 0
-    end, N * N))
-
-    # Celestial longitude and latitude share pixel dependencies because
-    # spherical rotation couples them.  Union their dependencies.
-    if wcs.lon_axis > 0 && wcs.lat_axis > 0
-        li = wcs.lon_axis
-        la = wcs.lat_axis
-        coupled = matrix[li, :] .| matrix[la, :]
-        matrix[li, :] .= coupled
-        matrix[la, :] .= coupled
-    end
-
-    return SMatrix{N, N, Bool}(matrix)
+        if has_celestial && (i == li || i == la)
+            wcs.cd[li, j] != 0 || wcs.cd[la, j] != 0
+        else
+            wcs.cd[i, j] != 0
+        end
+    end, Val(N * N)))
 end
 
 function axis_correlation_matrix(swcs::SlicedWCSTransform)
