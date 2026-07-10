@@ -124,15 +124,25 @@ end
         world = pixel_to_world(swcs, pix)
         @test world ≈ [100.0 + 2*(3 - 10), 200.0 + 3*(5 - 20)]
         @test world_to_pixel(swcs, world) ≈ pix
+        # Off-reference round-trip.
+        for pix in ([3.0, 4.0], [500.0, 200.0])
+            world = pixel_to_world(swcs, pix)
+            @test world_to_pixel(swcs, world) ≈ pix
+        end
     end
 
     @testset "StepRange slice → round-trip" begin
         swcs = slice_wcs(wcs, 1:2:10, 3:3:15)
+        # Reference pixel.
         pix = [2.0, 2.0]
         world = pixel_to_world(swcs, pix)
-        # pixel 2 → original 1 + 2*(2-1) = 3; original 3 + 3*(2-1) = 6
         @test world ≈ [100.0 + 2*(3 - 10), 200.0 + 3*(6 - 20)]
         @test world_to_pixel(swcs, world) ≈ pix
+        # Off-reference round-trip.
+        for pix in ([1.0, 3.0], [400.0, 100.0])
+            world = pixel_to_world(swcs, pix)
+            @test world_to_pixel(swcs, world) ≈ pix
+        end
     end
 
     @testset "Drop one axis via Integer" begin
@@ -143,11 +153,16 @@ end
         world = pixel_to_world(swcs, [1.0])
         @test world ≈ [200.0 + 3*(1 - 20)]  # only Y world axis kept
         @test world_to_pixel(swcs, world) ≈ [1.0]
+        # Off-reference round-trip.
+        for pix in ([3.0], [700.0])
+            world = pixel_to_world(swcs, pix)
+            @test world_to_pixel(swcs, world) ≈ pix
+        end
     end
 
     @testset "Multiple points round-trip" begin
         swcs = slice_wcs(wcs, 3:7, 5:10)
-        for pix_sub in ([1.0, 1.0], [3.0, 4.0], [5.0, 6.0])
+        for pix_sub in ([1.0, 1.0], [3.0, 4.0], [500.0, 600.0])
             world = pixel_to_world(swcs, pix_sub)
             @test world_to_pixel(swcs, world) ≈ pix_sub
         end
@@ -168,19 +183,30 @@ end
     @testset "Drop middle axis" begin
         swcs = slice_wcs(wcs, 1:10, 5, 1:10)
         @test pixel_n_dim(swcs) == 2
-        # Axis 2 dropped; axes 1 and 3 kept.
+        # Axis 2 dropped at pixel 5; axes 1 and 3 kept.
+        # Reference pixel.
         world = pixel_to_world(swcs, [1.0, 1.0])
-        @test world ≈ [10.0, 30.0]  # at reference pixels
+        @test world ≈ [10.0, 30.0]
         @test world_to_pixel(swcs, world) ≈ [1.0, 1.0]
+        # Off-reference round-trip.
+        for pix in ([3.0, 7.0], [500.0, 300.0])
+            world = pixel_to_world(swcs, pix)
+            @test world_to_pixel(swcs, world) ≈ pix
+        end
     end
 
     @testset "Step on all axes" begin
         swcs = slice_wcs(wcs, 1:2:10, 1:3:15, 1:1:20)
+        # Reference pixel.
         pix = [1.0, 1.0, 1.0]
         world = pixel_to_world(swcs, pix)
-        # all pixels = 1 → original 1
         @test world ≈ [10.0, 20.0, 30.0]
         @test world_to_pixel(swcs, world) ≈ pix
+        # Off-reference round-trip.
+        for pix in ([2.0, 3.0, 5.0], [400.0, 100.0, 200.0])
+            world = pixel_to_world(swcs, pix)
+            @test world_to_pixel(swcs, world) ≈ pix
+        end
     end
 
     @testset "Drop first and step on remaining" begin
@@ -188,10 +214,15 @@ end
         @test pixel_n_dim(swcs) == 2
         @test world_n_dim(swcs) == 2
         # Axis 1 dropped at 3, kept axes 2 and 3.
+        # Reference pixel.
         world = pixel_to_world(swcs, [1.0, 1.0])
-        # axis 2: pixel 1 → original 2; axis 3: pixel 1 → original 1
         @test world ≈ [20.0 + 2*(2-1), 30.0 + 3*(1-1)]
         @test world_to_pixel(swcs, world) ≈ [1.0, 1.0]
+        # Off-reference round-trip.
+        for pix in ([2.0, 3.0], [400.0, 500.0])
+            world = pixel_to_world(swcs, pix)
+            @test world_to_pixel(swcs, world) ≈ pix
+        end
     end
 end
 
@@ -265,6 +296,11 @@ end
         world = pixel_to_world(swcs, [10.0])
         @test world ≈ [100.0, 200.0]
         @test world_to_pixel(swcs, world) ≈ [10.0]
+        # Off-reference round-trip.
+        for pix in ([5.0], [1500.0])
+            world = pixel_to_world(swcs, pix)
+            @test world_to_pixel(swcs, world) ≈ pix
+        end
     end
 
     @testset "Drop both celestial axes: extract 1D spectrum at a spatial pixel" begin
@@ -304,7 +340,7 @@ end
     )
     wcs = WCS(hdr)
 
-    @testset "Range slice → round-trip" begin
+    @testset "Range slice → round-trip at reference pixel" begin
         swcs = slice_wcs(wcs, 8:15, 18:25)
         # Pixel (3, 3) in sliced = original (10, 20) = SIP reference.
         pix = [3.0, 3.0]
@@ -313,12 +349,29 @@ end
         @test world_to_pixel(swcs, world) ≈ pix atol=1e-8
     end
 
-    @testset "Step slice → round-trip" begin
+    @testset "Range slice → round-trip off reference" begin
+        swcs = slice_wcs(wcs, 8:15, 18:25)
+        # Off-reference pixels: SIP polynomial contributes non-zero correction.
+        for pix in ([1.0, 4.0], [5.0, 2.0], [2.0, 6.0])
+            world = pixel_to_world(swcs, pix)
+            @test world_to_pixel(swcs, world) ≈ pix atol=1e-8
+        end
+    end
+
+    @testset "Step slice → round-trip at reference pixel" begin
         swcs = slice_wcs(wcs, 8:2:14, 18:2:24)
         pix = [2.0, 2.0]  # original (10, 20)
         world = pixel_to_world(swcs, pix)
         @test world ≈ [100.0, 200.0] atol=1e-10
         @test world_to_pixel(swcs, world) ≈ pix atol=1e-8
+    end
+
+    @testset "Step slice → round-trip off reference" begin
+        swcs = slice_wcs(wcs, 8:2:14, 18:2:24)
+        for pix in ([1.0, 3.0], [30.0, 100.0])
+            world = pixel_to_world(swcs, pix)
+            @test world_to_pixel(swcs, world) ≈ pix atol=1e-8
+        end
     end
 end
 
@@ -335,13 +388,21 @@ end
     )
     wcs = WCS(hdr)
 
-    @testset "Range slice → round-trip" begin
+    @testset "Range slice → round-trip at reference pixel" begin
         swcs = slice_wcs(wcs, 400:600, 400:600)
         # Pixel (113, 113) in sliced = original (512, 512) = reference.
         pix = [113.0, 113.0]
         world = pixel_to_world(swcs, pix)
         @test world ≈ [83.8221, -5.3911] atol=1e-10
         @test world_to_pixel(swcs, world) ≈ pix atol=1e-8
+    end
+
+    @testset "Range slice → round-trip off reference" begin
+        swcs = slice_wcs(wcs, 400:600, 400:600)
+        for pix in ([50.0, 150.0], [10.0, 100.0], [2000.0, 500.0])
+            world = pixel_to_world(swcs, pix)
+            @test world_to_pixel(swcs, world) ≈ pix atol=1e-8
+        end
     end
 end
 
