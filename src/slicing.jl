@@ -213,26 +213,28 @@ end
 """
 Expand a sliced pixel coordinate to the full N-dimensional pixel space of the
 parent WCS.
+
+Uses `pixel_keep` to determine the mapping: for each parent axis `i`,
+`findfirst(==(i), pixel_keep)` gives the index into `pixel_sub` (or
+`nothing` if the axis was dropped).
 """
 function _expand_pixel(swcs::SlicedWCSTransform{N}, pixel_sub::AbstractVector) where {N}
     T = _coordinate_float_type(pixel_sub)
-    full = MVector{N, T}(undef)
-    j = 1  # index into pixel_sub
-    @inbounds for i in 1:N
-        s = swcs.slices[i]
-        if s isa DropAxis
-            full[i] = T(s.pixel)
+    slices = swcs.slices
+    pk = swcs.pixel_keep
+    return SVector{N, T}(ntuple(Val(N)) do i
+        s = slices[i]
+        k = something(findfirst(==(i), pk), 0)
+        if k == 0  # dropped axis
+            T(s.pixel)
         elseif s isa KeepAll
-            full[i] = T(pixel_sub[j])
-            j += 1
-        else
-            a = first(s.range)
-            stp = step(s.range)
-            full[i] = T(a) + T(stp) * (T(pixel_sub[j]) - one(T))
-            j += 1
+            T(pixel_sub[k])
+        else  # KeepRange
+            a = T(first(s.range))
+            stp = T(step(s.range))
+            T(a) + T(stp) * (T(pixel_sub[k]) - one(T))
         end
-    end
-    return SVector{N, T}(full)
+    end)
 end
 
 # ── world_to_pixel ──────────────────────────────────────────────────────────────
