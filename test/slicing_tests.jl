@@ -327,7 +327,7 @@ end
     @test eltype(world32) == Float32
     @test world32 ≈ Float32[4.0, 12.0]
 
-    pix32 = world_to_pixel(swcs, SVector{2, Float32}(4.0, 12.0))
+    pix32 = world_to_pixel(swcs, Float32[4.0, 12.0])
     @test eltype(pix32) == Float32
     @test pix32 ≈ Float32[1.0, 1.0]
 end
@@ -383,6 +383,8 @@ end
 @testset "Edge cases and errors" begin
     hdr = Dict(
         "NAXIS"  => 2,
+        "CRPIX1" => 0.0, "CRPIX2" => 0.0,
+        "CRVAL1" => 0.0, "CRVAL2" => 0.0,
         "CTYPE1" => "X", "CTYPE2" => "Y",
         "CDELT1" => 1.0, "CDELT2" => 1.0,
     )
@@ -392,9 +394,26 @@ end
         @test_throws ArgumentError slice_wcs(wcs, 1, 2)
     end
 
-    @testset "Wrong number of slice arguments → error" begin
-        @test_throws MethodError slice_wcs(wcs, 1:10)
-        @test_throws MethodError slice_wcs(wcs, 1, 2, 3)
+    @testset "Too many slice arguments → error" begin
+        @test_throws ArgumentError slice_wcs(wcs, 1, 2, 3)
+    end
+
+    @testset "Missing trailing arguments default to Colon" begin
+        # slice_wcs(wcs, 1:10) with a 2D WCS implicitly keeps axis 2.
+        swcs = slice_wcs(wcs, 1:10)
+        @test pixel_n_dim(swcs) == 2
+        @test world_n_dim(swcs) == 2
+        world = pixel_to_world(swcs, [1.0, 1.0])
+        @test world ≈ [1.0, 1.0]
+    end
+
+    @testset "Explicit Colon keeps axis unchanged" begin
+        swcs = slice_wcs(wcs, 1:5, :)
+        @test pixel_n_dim(swcs) == 2
+        # axis 1: pixel 1 → original 1, axis 2: pixel 3 → original 3 (identity).
+        world = pixel_to_world(swcs, [1.0, 3.0])
+        @test world ≈ [1.0, 3.0]
+        @test world_to_pixel(swcs, world) ≈ [1.0, 3.0]
     end
 
     @testset "Invalid slice type → error" begin

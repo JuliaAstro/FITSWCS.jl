@@ -8,6 +8,14 @@ Provides `slice_wcs` for producing sub-image WCS transforms and the
 # ── Slice descriptor types ──────────────────────────────────────────────────────
 
 """
+    KeepAll
+
+Sentinel indicating a pixel axis is kept unchanged (no offset, no stride).
+Equivalent to `:` in array-slicing notation.
+"""
+struct KeepAll end
+
+"""
     KeepRange{R}(range::AbstractRange)
 
 A kept pixel axis trimmed to `range`.  `R` is the concrete range type
@@ -79,12 +87,20 @@ axis order (axis 1, axis 2, ..., axis N) and is one of:
 Returns a `SlicedWCSTransform` with dimensionality equal to the number of
 range arguments.
 """
-function slice_wcs(wcs::WCSTransform{N}, slices::Vararg{Any, N}) where {N}
-    # Normalize each slice to KeepRange or DropAxis.
-    normalized = _normalize_slices(slices)
+function slice_wcs(wcs::WCSTransform{N}, slices::Vararg{Any, M}) where {N, M}
+    # Pad missing trailing axes with Colon (keep all).
+    if M < N
+        padded = ntuple(i -> i <= M ? slices[i] : Colon(), N)
+    else
+        M == N || throw(ArgumentError(
+            "too many slice arguments: got $M, expected at most $N"))
+        padded = slices
+    end
+    # Normalize each slice to KeepAll, KeepRange, or DropAxis.
+    normalized = _normalize_slices(padded)
 
     # Determine which pixel axes are kept.
-    pixel_keep = Int[i for (i, s) in enumerate(normalized) if s isa KeepRange]
+    pixel_keep = Int[i for (i, s) in enumerate(normalized) if s isa Union{KeepAll, KeepRange}]
     Np = length(pixel_keep)
     Np > 0 || throw(ArgumentError("All pixel axes were dropped; a WCS must have at least one pixel axis"))
 
@@ -93,14 +109,14 @@ function slice_wcs(wcs::WCSTransform{N}, slices::Vararg{Any, N}) where {N}
     world_keep = Int[w for w in 1:N if any(corr[w, pixel_keep])]
     Nw = length(world_keep)
     Nw > 0 || throw(ArgumentError("No world axes depend on the kept pixel axes"))
-
+    
     # Precompute world-coordinate values for dropped world axes.
     # We evaluate the forward transform at a nominal pixel where kept axes are
     # at the reference pixel (crpix) and dropped axes are at their fixed values.
     # Because a world axis is only dropped if it does not depend on any kept
     # pixel axis, these values are exact for all kept-pixel positions.
-    nominal_pixel = Vector{Float64}(undef, N)
-    for i in 1:N
+    nominal_pixel = MVector{N, Float64}(undef)
+    @inbounds for i in 1:N
         s = normalized[i]
         if s isa DropAxis
             nominal_pixel[i] = s.pixel
@@ -120,17 +136,19 @@ function slice_wcs(wcs::WCSTransform{N}, slices::Vararg{Any, N}) where {N}
     )
 end
 
-"""Normalize a tuple of slice arguments into `KeepRange` or `DropAxis`."""
+"""Normalize a tuple of slice arguments into `KeepAll`, `KeepRange`, or `DropAxis`."""
 function _normalize_slices(slices::Tuple)
     return ntuple(length(slices)) do i
         s = slices[i]
-        if s isa Integer
+        if s isa Colon
+            KeepAll()
+        elseif s isa Integer
             DropAxis(Float64(s))
         elseif s isa AbstractRange
             KeepRange(s)
         else
             throw(ArgumentError(
-                "slice argument $i must be an Integer or AbstractRange, got $(typeof(s))"
+                "slice argument $i must be an Integer, AbstractRange, or Colon, got $(typeof(s))"
             ))
         end
     end
@@ -180,6 +198,9 @@ function _expand_pixel(swcs::SlicedWCSTransform{N}, pixel′::AbstractVector) wh
         s = swcs.slices[i]
         if s isa DropAxis
             full[i] = T(s.pixel)
+        elseif s isa KeepAll
+            full[i] = T(pixel′[j])
+            j += 1
         else
             a = first(s.range)
             stp = step(s.range)
@@ -242,7 +263,10 @@ function _extract_kept_pixel(swcs::SlicedWCSTransform{N, Np}, full_pixel::Abstra
     j = 1
     @inbounds for i in 1:N
         s = swcs.slices[i]
-        if s isa KeepRange
+        if s isa KeepAll
+            pix[j] = T(full_pixel[i])
+            j += 1
+        elseif s isa KeepRange
             a = T(first(s.range))
             stp = T(step(s.range))
             pix[j] = (T(full_pixel[i]) - a) / stp + one(T)
