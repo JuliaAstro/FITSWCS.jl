@@ -256,6 +256,29 @@ end
         @test world ≈ [100.0, 200.0]
         @test world_to_pixel(swcs, world) ≈ [10.0]
     end
+    
+    @testset "Drop both celestial axes: extract 1D spectrum at a spatial pixel" begin
+        hdr = Dict(
+            "NAXIS"  => 3,
+            "CTYPE1" => "RA---TAN", "CTYPE2" => "DEC--TAN", "CTYPE3" => "FREQ",
+            "CRPIX1" => 512.0, "CRPIX2" => 512.0, "CRPIX3" => 1.0,
+            "CRVAL1" => 83.8221, "CRVAL2" => -5.3911, "CRVAL3" => 1.42e9,
+            "CDELT1" => -2.7778e-4, "CDELT2" => 2.7778e-4, "CDELT3" => 1.0e6,
+        )
+        wcs = WCS(hdr)
+        swcs = slice_wcs(wcs, 23, 52, :)
+        @test pixel_n_dim(swcs) == 1
+        @test world_n_dim(swcs) == 1
+
+        # Forward: pixel 3 in sliced image gives FREQ at spatial pixel (23, 52).
+        world_1d = pixel_to_world(swcs, [3.0])
+        world_full = pixel_to_world(wcs, [23.0, 52.0, 3.0])
+        @test world_1d[1] ≈ world_full[3]
+
+        # Inverse: recover the spectral pixel.
+        pix_1d = world_to_pixel(swcs, [1.422e9])
+        @test pix_1d ≈ [3.0]
+    end
 end
 
 # ──────────────────────────────────────────────────────────────────────────────

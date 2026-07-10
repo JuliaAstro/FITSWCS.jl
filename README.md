@@ -130,6 +130,34 @@ eq  = pixel_to_world(all_wcs[' '], [512.0, 512.0])  # [266.405, -28.936]
 gal = pixel_to_world(all_wcs['A'], [512.0, 512.0])  # [0.0, 0.0]
 ```
 
+## WCS Slicing
+
+`slice_wcs` produces a `SlicedWCSTransform` for sub-images, downsampled
+views, or axis-dropped cutouts.  Each positional argument corresponds to
+one pixel axis in FITS axis order:
+
+- `a:b` — keep the axis, trimmed to `[a, b]`.
+- `a:s:b` — keep the axis with stride `s`.
+- `k` — drop the axis, fixing it at pixel `k`.
+- `:` or omitted trailing arguments — keep the axis unchanged.
+
+Pixel `1` in the sliced image maps to the first element of each range.
+
+```julia
+swcs = slice_wcs(wcs, 400:600, 400:600)
+# pixel 1 → original 400; pixel 201 → original 600
+
+pixel_to_world(swcs, [1, 1]) == pixel_to_world(wcs, [400, 400])  # true
+
+# Drop the spectral axis of a 3D cube:
+swcs_2d = slice_wcs(wcs3d, 1:1024, 1:1024, 42)
+# Result is a 2D WCS (RA/Dec only) at spectral pixel 42.
+
+# Drop the spatial axes of a 3D spectral cube
+swcs_1d = slice_wcs(wcs3d, 23, 52, :)
+# Result is a 1D WCS (spectral axis only) for one spatial pixel.
+```
+
 ## Supported Header Keywords
 
 The parser currently supports these image-WCS keyword families:

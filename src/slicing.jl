@@ -52,6 +52,7 @@ _normalize_slice(s) = throw(ArgumentError(
     SlicedWCSTransform{N, Np, Nw, S, T} <: AbstractWCSTransform
 
 WCS transform representing a sliced view of a parent `WCSTransform`.
+Constructed with `slice_wcs`.
 
 # Type parameters
 
@@ -97,6 +98,27 @@ axis order (axis 1, axis 2, ..., axis N) and is one of:
 
 Returns a `SlicedWCSTransform` with dimensionality equal to the number of
 range arguments.
+
+Pixel ``1`` in the sliced image corresponds to the first element of each
+range argument.  For example, ``pixel_to_world(swcs, [1, 1])`` returns
+the same world coordinates as ``pixel_to_world(wcs, [a, b])`` when
+slicing with ``a:b`` ranges.
+
+# Examples
+
+```jldoctest
+julia> hdr = Dict("NAXIS" => 2, "CTYPE1" => "X", "CTYPE2" => "Y",
+                  "CRPIX1" => 512.0, "CRPIX2" => 512.0,
+                  "CRVAL1" => 0.0, "CRVAL2" => 0.0,
+                  "CDELT1" => 1.0, "CDELT2" => 1.0);
+
+julia> wcs = WCS(hdr);
+
+julia> swcs = slice_wcs(wcs, 400:600, 500:600);
+
+julia> pixel_to_world(swcs, [1, 1]) == pixel_to_world(wcs, [400, 500])
+true
+```
 """
 function slice_wcs(wcs::WCSTransform{N}, slices::Vararg{Any, M}) where {N, M}
     # Pad missing trailing axes with Colon (keep all).
@@ -228,6 +250,7 @@ function world_to_pixel(swcs::SlicedWCSTransform, world_sub::AbstractVector)
 
     # Extract kept pixel axes and undo the slice offset.
     pixel_sub = _extract_kept_pixel(swcs, full_pixel)
+
     return pixel_sub
 end
 
@@ -261,21 +284,24 @@ where a and s come from the slice range.
 """
 function _extract_kept_pixel(swcs::SlicedWCSTransform{N, Np}, full_pixel::AbstractVector) where {N, Np}
     T = _coordinate_float_type(full_pixel)
-    pix = MVector{Np, T}(undef)
-    j = 1
-    @inbounds for i in 1:N
-        s = swcs.slices[i]
+    slices = swcs.slices
+
+    # Build the converted N-element vector in one pass, then index with
+    # pixel_keep (integer indexing is ~0 ns vs ~27 ns for boolean mask).
+    all_pix = SVector{N, T}(ntuple(Val(N)) do i
+        s = slices[i]
         if s isa KeepAll
-            pix[j] = T(full_pixel[i])
-            j += 1
+            T(full_pixel[i])
         elseif s isa KeepRange
             a = T(first(s.range))
             stp = T(step(s.range))
-            pix[j] = (T(full_pixel[i]) - a) / stp + one(T)
-            j += 1
+            (T(full_pixel[i]) - a) / stp + one(T)
+        else  # DropAxis — pass through, filtered out by pixel_keep indexing
+            T(full_pixel[i])
         end
-    end
-    return SVector{Np, T}(pix)
+    end)
+
+    return _extract_kept(all_pix, swcs.pixel_keep)
 end
 
 # ── Generic extraction helper ───────────────────────────────────────────────────
