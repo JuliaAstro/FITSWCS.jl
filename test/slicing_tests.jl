@@ -407,6 +407,77 @@ end
 end
 
 # ──────────────────────────────────────────────────────────────────────────────
+@testset "Recursive slicing (slice_wcs on SlicedWCSTransform)" begin
+    hdr = Dict(
+        "NAXIS"  => 3,
+        "CTYPE1" => "X", "CTYPE2" => "Y", "CTYPE3" => "Z",
+        "CRPIX1" => 10.0, "CRPIX2" => 10.0, "CRPIX3" => 10.0,
+        "CRVAL1" => 100.0, "CRVAL2" => 200.0, "CRVAL3" => 300.0,
+        "CDELT1" => 2.0, "CDELT2" => 3.0, "CDELT3" => 4.0,
+    )
+    wcs = WCS(hdr)
+
+    @testset "Range on range → round-trip" begin
+        swcs1 = slice_wcs(wcs, 3:9, 5:15, 1:10)
+        swcs2 = slice_wcs(swcs1, 2:4, 1:5, :)
+        # swcs2 should unwrap to original, not nest.
+        @test swcs2.parent === wcs
+        @test pixel_n_dim(swcs2) == 3
+        # Off-reference round-trip.
+        for pix in ([1.0, 3.0, 5.0], [30.0, 10.0, 100.0])
+            world = pixel_to_world(swcs2, pix)
+            @test world_to_pixel(swcs2, world) ≈ pix
+        end
+    end
+
+    @testset "Drop on range" begin
+        swcs1 = slice_wcs(wcs, 3:9, 5:15, 2:10)
+        # Drop axis 1 at sub-pixel 3 → original pixel 3 + 2 = 5
+        swcs2 = slice_wcs(swcs1, 3, 1:5, :)
+        @test swcs2.parent === wcs
+        @test pixel_n_dim(swcs2) == 2
+        world = pixel_to_world(swcs2, [1.0, 1.0])
+        # axis 1 dropped at orig 5, axis 2: pix=1→orig=5, axis 3: pix=1→orig=2
+        @test world ≈ [200.0 + 3*(5 - 10), 300.0 + 4*(2 - 10)]
+        @test world_to_pixel(swcs2, world) ≈ [1.0, 1.0]
+    end
+
+    @testset "Step on range" begin
+        swcs1 = slice_wcs(wcs, 1:10, 1:10, 1:10)
+        swcs2 = slice_wcs(swcs1, 1:2:5, 1:3:7, :)
+        @test swcs2.parent === wcs
+        @test pixel_n_dim(swcs2) == 3
+        # pixel (2, 2, 3) → sub=(3, 4, 3) → parent=(3, 4, 3)
+        pix = [2.0, 2.0, 3.0]
+        world = pixel_to_world(swcs2, pix)
+        @test world ≈ pixel_to_world(wcs, [3.0, 4.0, 3.0])
+        @test world_to_pixel(swcs2, world) ≈ pix
+    end
+
+    @testset "Colon on range (identity pass-through)" begin
+        swcs1 = slice_wcs(wcs, 3:9, 5:15, 1:10)
+        swcs2 = slice_wcs(swcs1, :, :, :)
+        @test swcs2.parent === wcs
+        # Should be equivalent to swcs1.
+        pix = [2.0, 5.0, 7.0]
+        @test pixel_to_world(swcs2, pix) ≈ pixel_to_world(swcs1, pix)
+        @test world_to_pixel(swcs2, pixel_to_world(swcs2, pix)) ≈ pix
+    end
+
+    @testset "Too many slice arguments → error" begin
+        swcs1 = slice_wcs(wcs, 1:5, 1:5, 1:5)
+        @test_throws ArgumentError slice_wcs(swcs1, 1, 2, 3, 4)
+    end
+
+    @testset "Implied Colon on trailing axes" begin
+        swcs1 = slice_wcs(wcs, 3:7, 5:10, 1:10)
+        swcs2 = slice_wcs(swcs1, 2:4)  # only axis 1, rest implied Colon
+        @test pixel_n_dim(swcs2) == 3
+        @test swcs2.parent === wcs
+    end
+end
+
+# ──────────────────────────────────────────────────────────────────────────────
 @testset "Float32 preservation" begin
     hdr = Dict(
         "NAXIS"  => 2,

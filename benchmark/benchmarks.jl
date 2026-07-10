@@ -369,6 +369,16 @@ let g = SUITE["parsing"]
     g["WCS/grism/AWAV-GRA"] = @benchmarkable WCS($_hdr_grism) evals=5 samples=3
 end
 
+# ── slicing ──────────────────────────────────────────────────────────────────
+
+SUITE["slicing"] = BenchmarkGroup()
+let g = SUITE["slicing"]
+    g["slice/2-D spatial"] = @benchmarkable slice_wcs($WCS_TAN, $(10:512), $(15:512)) evals=100
+    g["slice/3-D drop spectral"] = @benchmarkable slice_wcs($WCS_CUBE, $(10:512), $(15:512), $5) evals=100
+    g["slice/3-D drop spatial"] = @benchmarkable slice_wcs($WCS_CUBE, $10, $15) evals=100
+    g["slice/2-D coupled-TAB"] = @benchmarkable slice_wcs($WCS_COUPLED_TAB, $(10:20), $(15:20)) evals=100
+    g["slice/2-D spatial recursive"] = @benchmarkable slice_wcs($WCS_TAN_SLICED, $(10:20), $(15:30)) evals=100
+end
 
 # ── If not on CI, show a nice table ──────────────────────────────────────────
 if get(ENV, "CI", "false") == "false"

@@ -46,6 +46,40 @@ _normalize_slice(s) = throw(ArgumentError(
     "slice must be an Integer, AbstractRange, or Colon, got $(typeof(s))"
 ))
 
+# ── Slice composition (for recursive slicing of SlicedWCSTransform) ─────────────
+
+"""
+    _compose_slices(old, new) -> slice_spec
+
+Combine an existing slice spec `old` (KeepAll, KeepRange, or DropAxis) with a
+new raw slice argument `new` (Colon, Integer, or AbstractRange) on the
+sub-image coordinate space.  Returns a new slice spec on the parent coordinate
+space.
+
+Used by `slice_wcs(::SlicedWCSTransform, ...)` to compose nested slices
+without wrapper nesting.
+"""
+_compose_slices(::KeepAll, ::Colon) = KeepAll()
+_compose_slices(::KeepAll, k::Integer) = DropAxis(Float64(k))
+_compose_slices(::KeepAll, r::AbstractRange) = KeepRange(r)
+
+# old=KeepRange: sub-coordinate p_sub maps to parent p = a1 + s1·(p_sub - 1).
+_compose_slices(old::KeepRange, ::Colon) = old
+function _compose_slices(old::KeepRange, k::Integer)
+    a1 = first(old.range)
+    s1 = step(old.range)
+    return DropAxis(Float64(a1 + s1 * (k - 1)))
+end
+function _compose_slices(old::KeepRange, new::AbstractRange)
+    a1 = first(old.range); s1 = step(old.range)
+    a2 = first(new); s2 = step(new)
+    a3 = a1 + s1 * (a2 - 1)
+    s3 = s1 * s2
+    return KeepRange(a3:s3:(a3 + s3 * (length(new) - 1)))
+end
+
+# old=DropAxis: unreachable — dropped axes are not in pixel_keep.
+
 # ── Sliced WCS transform ────────────────────────────────────────────────────────
 
 """
@@ -82,7 +116,58 @@ end
 
 # ── Constructor ─────────────────────────────────────────────────────────────────
 
-# TODO: Support slice_wcs on SlicedWCSTransform (compose slices)
+"""
+    _slice_normalized(wcs::WCSTransform, normalized)
+Core construction logic shared by `slice_wcs` on both concrete types."""
+function _slice_normalized(wcs::WCSTransform{N}, normalized) where {N}
+    # Determine which pixel axes are kept.
+    pixel_keep = Int[i for (i, s) in enumerate(normalized) if _is_kept(s)]
+    Np = length(pixel_keep)
+    Np > 0 || throw(ArgumentError("All pixel axes were dropped; a WCS must have at least one pixel axis"))
+
+    # Determine which world axes to keep using the correlation matrix.
+    corr = axis_correlation_matrix(wcs)
+    world_keep = Int[w for w in 1:N if any(corr[w, pixel_keep])]
+    Nw = length(world_keep)
+    Nw > 0 || throw(ArgumentError("No world axes depend on the kept pixel axes"))
+
+    # Precompute world-coordinate values for dropped world axes.
+    # We evaluate the forward transform at a nominal pixel where kept axes are
+    # at the reference pixel (crpix) and dropped axes are at their fixed values.
+    # Because a world axis is only dropped if it does not depend on any kept
+    # pixel axis, these values are exact for all kept-pixel positions.
+    nominal_pixel = MVector{N, Float64}(undef)
+    @inbounds for i in 1:N
+        s = normalized[i]
+        if s isa DropAxis
+            nominal_pixel[i] = s.pixel
+        else
+            nominal_pixel[i] = wcs.crpix[i]
+        end
+    end
+    dropped_world_values = pixel_to_world(wcs, SVector{N, Float64}(nominal_pixel))
+
+    # Function barrier: Val(Np) and Val(Nw) let the compiler specialize
+    # SVector construction for the exact sizes, avoiding type instability.
+    return _construct_sliced(wcs, normalized, pixel_keep, world_keep,
+                             dropped_world_values, Val(Np), Val(Nw))
+end
+
+function _construct_sliced(wcs::WCSTransform{N}, normalized::S,
+                           pixel_keep::Vector{Int},
+                           world_keep::Vector{Int},
+                           dropped_world_values::AbstractVector,
+                           ::Val{Np}, ::Val{Nw}) where {N, Np, Nw, S}
+    pk = SVector{Np, Int}(pixel_keep)
+    wk = SVector{Nw, Int}(world_keep)
+    dwv = SVector{N, Float64}(ntuple(i -> dropped_world_values[i], N))
+    return SlicedWCSTransform{N, Np, Nw, S, typeof(wcs)}(
+        wcs, normalized, pk, wk, dwv
+    )
+end
+
+# ── Public constructors ──────────────────────────────────────────────────────────
+
 """
     slice_wcs(wcs::WCSTransform, slices...) -> SlicedWCSTransform
 
@@ -132,51 +217,42 @@ function slice_wcs(wcs::WCSTransform{N}, slices::Vararg{Any, M}) where {N, M}
     end
     # Normalize each slice to KeepAll, KeepRange, or DropAxis.
     normalized = _normalize_slice.(padded)
-
-    # Determine which pixel axes are kept.
-    pixel_keep = Int[i for (i, s) in enumerate(normalized) if _is_kept(s)]
-    Np = length(pixel_keep)
-    Np > 0 || throw(ArgumentError("All pixel axes were dropped; a WCS must have at least one pixel axis"))
-
-    # Determine which world axes to keep using the correlation matrix.
-    corr = axis_correlation_matrix(wcs)
-    world_keep = Int[w for w in 1:N if any(corr[w, pixel_keep])]
-    Nw = length(world_keep)
-    Nw > 0 || throw(ArgumentError("No world axes depend on the kept pixel axes"))
-    
-    # Precompute world-coordinate values for dropped world axes.
-    # We evaluate the forward transform at a nominal pixel where kept axes are
-    # at the reference pixel (crpix) and dropped axes are at their fixed values.
-    # Because a world axis is only dropped if it does not depend on any kept
-    # pixel axis, these values are exact for all kept-pixel positions.
-    nominal_pixel = MVector{N, Float64}(undef)
-    @inbounds for i in 1:N
-        s = normalized[i]
-        if s isa DropAxis
-            nominal_pixel[i] = s.pixel
-        else
-            nominal_pixel[i] = wcs.crpix[i]
-        end
-    end
-    dropped_world_values = pixel_to_world(wcs, SVector{N, Float64}(nominal_pixel))
-
-    # Function barrier: Val(Np) and Val(Nw) let the compiler specialize
-    # SVector construction for the exact sizes, avoiding type instability.
-    return _construct_sliced(wcs, normalized, pixel_keep, world_keep,
-                             dropped_world_values, Val(Np), Val(Nw))
+    return _slice_normalized(wcs, normalized)
 end
 
-function _construct_sliced(wcs::WCSTransform{N}, normalized::S,
-                                   pixel_keep::Vector{Int},
-                                   world_keep::Vector{Int},
-                                   dropped_world_values::AbstractVector,
-                                   ::Val{Np}, ::Val{Nw}) where {N, Np, Nw, S}
-    pk = SVector{Np, Int}(pixel_keep)
-    wk = SVector{Nw, Int}(world_keep)
-    dwv = SVector{N, Float64}(ntuple(i -> dropped_world_values[i], N))
-    return SlicedWCSTransform{N, Np, Nw, S, typeof(wcs)}(
-        wcs, normalized, pk, wk, dwv
-    )
+"""
+    slice_wcs(swcs::SlicedWCSTransform, slices...) -> SlicedWCSTransform
+
+Slice an already-sliced WCS.  Maps the new slice arguments (applied to the
+sub-image pixel axes) back to the original parent axes, composes them with the
+existing slice specs, and constructs a new `SlicedWCSTransform` that wraps the
+original parent — never nests wrappers.
+"""
+function slice_wcs(swcs::SlicedWCSTransform{N, Np}, slices::Vararg{Any, M}) where {N, Np, M}
+    # Pad/validate: M new slices for Np kept pixel axes.
+    if M < Np
+        new_slices = ntuple(i -> i <= M ? slices[i] : Colon(), Np)
+    elseif M == Np
+        new_slices = slices
+    else
+        throw(ArgumentError(
+            "too many slice arguments: got $M, expected at most $Np"))
+    end
+
+    # Map new slices to parent axes and compose with existing specs.
+    old_slices = swcs.slices
+    pk = swcs.pixel_keep
+    composed = ntuple(N) do i
+        k = something(findfirst(==(i), pk), 0)
+        if k == 0
+            old_slices[i]  # already dropped, pass through unchanged
+        else
+            _compose_slices(old_slices[i], new_slices[k])
+        end
+    end
+
+    # Construct directly from the composed (already normalized) specs.
+    return _slice_normalized(swcs.parent, composed)
 end
 
 # ── Disambiguation: batch vector-of-vectors vs single-coordinate AbstractVector ─
