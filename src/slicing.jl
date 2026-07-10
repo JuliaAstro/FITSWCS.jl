@@ -265,17 +265,12 @@ kept pixel axes).
 """
 function _build_full_world(swcs::SlicedWCSTransform{N}, world_sub::AbstractVector) where {N}
     T = _coordinate_float_type(world_sub)
-    full = MVector{N, T}(undef)
-    j = 1  # index into world_sub
-    @inbounds for i in 1:N
-        if i in swcs.world_keep
-            full[i] = T(world_sub[j])
-            j += 1
-        else
-            full[i] = T(swcs.dropped_world_values[i])
-        end
-    end
-    return SVector{N, T}(full)
+    wk = swcs.world_keep
+    dwv = swcs.dropped_world_values
+    return SVector{N, T}(ntuple(Val(N)) do i
+        k = something(findfirst(==(i), wk), 0)
+        k == 0 ? T(dwv[i]) : T(world_sub[k])
+    end)
 end
 
 """
