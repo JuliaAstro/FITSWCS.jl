@@ -478,6 +478,36 @@ end
 end
 
 # ──────────────────────────────────────────────────────────────────────────────
+@testset "slice_wcs on Dict{Char, AbstractWCSTransform}" begin
+    hdr = Dict(
+        "NAXIS"   => 2,
+        "CTYPE1"  => "RA---TAN", "CTYPE2"  => "DEC--TAN",
+        "CRPIX1"  => 512.0, "CRPIX2" => 512.0,
+        "CRVAL1"  => 83.8221, "CRVAL2" => -5.3911,
+        "CDELT1"  => -2.7778e-4, "CDELT2" => 2.7778e-4,
+        "CTYPE1A" => "GLON-TAN", "CTYPE2A" => "GLAT-TAN",
+        "CRPIX1A" => 512.0, "CRPIX2A" => 512.0,
+        "CRVAL1A" => 0.0, "CRVAL2A" => 0.0,
+        "CDELT1A" => -2.7778e-4, "CDELT2A" => 2.7778e-4,
+    )
+    all_wcs = WCS_all(hdr)
+
+    sliced = slice_wcs(all_wcs, 400:600, 400:600)
+    @test length(sliced) == 2
+    @test haskey(sliced, ' ')
+    @test haskey(sliced, 'A')
+    @test sliced[' '] isa SlicedWCSTransform
+    @test sliced['A'] isa SlicedWCSTransform
+
+    # Both alternates should give consistent results at the reference pixel.
+    pix = [113.0, 113.0]  # original (512, 512)
+    world_eq = pixel_to_world(sliced[' '], pix)
+    world_gal = pixel_to_world(sliced['A'], pix)
+    @test world_eq ≈ pixel_to_world(all_wcs[' '], [512.0, 512.0])
+    @test world_gal ≈ pixel_to_world(all_wcs['A'], [512.0, 512.0])
+end
+
+# ──────────────────────────────────────────────────────────────────────────────
 @testset "Float32 preservation" begin
     hdr = Dict(
         "NAXIS"  => 2,

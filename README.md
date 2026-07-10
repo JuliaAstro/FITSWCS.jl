@@ -158,6 +158,15 @@ swcs_1d = slice_wcs(wcs3d, 23, 52, :)
 # Result is a 1D WCS (spectral axis only) for one spatial pixel.
 ```
 
+`slice_wcs` also accepts the `Dict{Char, WCSTransform}` returned by
+`WCS_all`, slicing every alternate at once:
+
+```julia
+all_wcs = WCS_all(header)
+sliced = slice_wcs(all_wcs, 400:600, 400:600)
+# sliced[' '] and sliced['A'] are SlicedWCSTransform instances.
+```
+
 ## Supported Header Keywords
 
 The parser currently supports these image-WCS keyword families:

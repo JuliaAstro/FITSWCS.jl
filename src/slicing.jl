@@ -255,6 +255,15 @@ function slice_wcs(swcs::SlicedWCSTransform{N, Np}, slices::Vararg{Any, M}) wher
     return _slice_normalized(swcs.parent, composed)
 end
 
+"""
+    slice_wcs(dict::Dict{Char, <:AbstractWCSTransform}, slices...) -> Dict{Char, SlicedWCSTransform}
+
+Slice every WCS in a dictionary of the type returned by `WCS_all`.
+"""
+function slice_wcs(dict::Dict{Char, T}, slices...) where {T <: AbstractWCSTransform}
+    return Dict(c => slice_wcs(wcs, slices...) for (c, wcs) in dict)
+end
+
 # ── Disambiguation: batch vector-of-vectors vs single-coordinate AbstractVector ─
 
 # A Vector{<:AbstractVector} matches both the batch method on
