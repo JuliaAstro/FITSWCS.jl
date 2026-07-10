@@ -147,9 +147,9 @@ end
 
     @testset "Multiple points round-trip" begin
         swcs = slice_wcs(wcs, 3:7, 5:10)
-        for pix′ in ([1.0, 1.0], [3.0, 4.0], [5.0, 6.0])
-            world = pixel_to_world(swcs, pix′)
-            @test world_to_pixel(swcs, world) ≈ pix′
+        for pix_sub in ([1.0, 1.0], [3.0, 4.0], [5.0, 6.0])
+            world = pixel_to_world(swcs, pix_sub)
+            @test world_to_pixel(swcs, world) ≈ pix_sub
         end
     end
 end

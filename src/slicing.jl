@@ -181,12 +181,12 @@ end
 
 # ── pixel_to_world ──────────────────────────────────────────────────────────────
 
-function pixel_to_world(swcs::SlicedWCSTransform, pixel′::AbstractVector)
-    length(pixel′) == pixel_n_dim(swcs) ||
-        throw(DimensionMismatch("pixel′ has length $(length(pixel′)), expected $(pixel_n_dim(swcs))"))
+function pixel_to_world(swcs::SlicedWCSTransform, pixel_sub::AbstractVector)
+    length(pixel_sub) == pixel_n_dim(swcs) ||
+        throw(DimensionMismatch("pixel_sub has length $(length(pixel_sub)), expected $(pixel_n_dim(swcs))"))
 
     # Expand the sliced pixel coordinate to full N-dim pixel space.
-    full_pixel = _expand_pixel(swcs, pixel′)
+    full_pixel = _expand_pixel(swcs, pixel_sub)
 
     # Transform using the parent WCS (handles all distortions automatically).
     full_world = pixel_to_world(swcs.parent, full_pixel)
@@ -199,21 +199,21 @@ end
 Expand a sliced pixel coordinate to the full N-dimensional pixel space of the
 parent WCS.
 """
-function _expand_pixel(swcs::SlicedWCSTransform{N}, pixel′::AbstractVector) where {N}
-    T = _coordinate_float_type(pixel′)
+function _expand_pixel(swcs::SlicedWCSTransform{N}, pixel_sub::AbstractVector) where {N}
+    T = _coordinate_float_type(pixel_sub)
     full = MVector{N, T}(undef)
-    j = 1  # index into pixel′
+    j = 1  # index into pixel_sub
     @inbounds for i in 1:N
         s = swcs.slices[i]
         if s isa DropAxis
             full[i] = T(s.pixel)
         elseif s isa KeepAll
-            full[i] = T(pixel′[j])
+            full[i] = T(pixel_sub[j])
             j += 1
         else
             a = first(s.range)
             stp = step(s.range)
-            full[i] = T(a) + T(stp) * (T(pixel′[j]) - one(T))
+            full[i] = T(a) + T(stp) * (T(pixel_sub[j]) - one(T))
             j += 1
         end
     end
@@ -222,20 +222,20 @@ end
 
 # ── world_to_pixel ──────────────────────────────────────────────────────────────
 
-function world_to_pixel(swcs::SlicedWCSTransform, world′::AbstractVector)
-    length(world′) == world_n_dim(swcs) ||
-        throw(DimensionMismatch("world′ has length $(length(world′)), expected $(world_n_dim(swcs))"))
+function world_to_pixel(swcs::SlicedWCSTransform, world_sub::AbstractVector)
+    length(world_sub) == world_n_dim(swcs) ||
+        throw(DimensionMismatch("world_sub has length $(length(world_sub)), expected $(world_n_dim(swcs))"))
 
     # Build full N-dim world vector: user values for kept axes, precomputed
     # values for dropped axes.
-    full_world = _build_full_world(swcs, world′)
+    full_world = _build_full_world(swcs, world_sub)
 
     # Invert through parent WCS (single shot, no iteration).
     full_pixel = world_to_pixel(swcs.parent, full_world)
 
     # Extract kept pixel axes and undo the slice offset.
-    pixel′ = _extract_kept_pixel(swcs, full_pixel)
-    return pixel′
+    pixel_sub = _extract_kept_pixel(swcs, full_pixel)
+    return pixel_sub
 end
 
 """
@@ -245,13 +245,13 @@ Kept world axes get the user-supplied values; dropped world axes use the
 precomputed `dropped_world_values` (exact because they don't depend on
 kept pixel axes).
 """
-function _build_full_world(swcs::SlicedWCSTransform{N}, world′::AbstractVector) where {N}
-    T = _coordinate_float_type(world′)
+function _build_full_world(swcs::SlicedWCSTransform{N}, world_sub::AbstractVector) where {N}
+    T = _coordinate_float_type(world_sub)
     full = MVector{N, T}(undef)
-    j = 1  # index into world′
+    j = 1  # index into world_sub
     @inbounds for i in 1:N
         if i in swcs.world_keep
-            full[i] = T(world′[j])
+            full[i] = T(world_sub[j])
             j += 1
         else
             full[i] = T(swcs.dropped_world_values[i])
@@ -263,7 +263,7 @@ end
 """
 Extract kept pixel coordinates from a full pixel vector and undo slice offsets.
 
-For each kept pixel axis: pixel′ = (pixel_old - a) / s + 1
+For each kept pixel axis: pixel_sub = (pixel_old - a) / s + 1
 where a and s come from the slice range.
 """
 function _extract_kept_pixel(swcs::SlicedWCSTransform{N, Np}, full_pixel::AbstractVector) where {N, Np}
