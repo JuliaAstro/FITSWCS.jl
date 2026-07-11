@@ -53,6 +53,26 @@
         @test corr == Bool[1 1 0; 1 1 0; 0 0 1]
     end
 
+    @testset "Asymmetric CD is not transposed" begin
+        # World axes 1 and 2 depend on pixel axis 3 (CD1_3, CD2_3), but world axis 3 depends only on pixel axis 3.
+        # The [world, pixel] matrix is therefore asymmetric. A transposed builder would get this wrong
+        # (all the other cases here are symmetric and can't catch it).
+        hdr = Dict{String, Any}(
+            "NAXIS"  => 3,
+            "CTYPE1" => "X", "CTYPE2" => "Y", "CTYPE3" => "Z",
+            "CD1_1"  => 1.0, "CD2_2" => 1.0, "CD3_3" => 1.0,
+            "CD1_3"  => 0.2, "CD2_3" => 0.1,
+        )
+        wcs = WCS(hdr)
+        corr = axis_correlation_matrix(wcs)
+        @test corr == Bool[1 0 1; 0 1 1; 0 0 1]
+        # Dropping the independent pixel axis 3 leaves world axis 3 with no dependency on a kept pixel axis,
+        # so it is dropped: 2 world axes remain.
+        swcs = slice_wcs(wcs, 1:5, 1:6, 3)
+        @test pixel_n_dim(swcs) == 2
+        @test world_n_dim(swcs) == 2
+    end
+
     @testset "SIP distortion forces all-true" begin
         hdr = Dict{String,Any}(
             "NAXIS"  => 2,

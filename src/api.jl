@@ -44,16 +44,18 @@ function axis_correlation_matrix(wcs::WCSTransform{N}) where {N}
     la = wcs.lat_axis
     has_celestial = li > 0 && la > 0
 
-    # Build the correlation SMatrix in one pass.  For celestial axes the
-    # longitude and latitude share pixel dependencies (spherical rotation
-    # couples them), so those rows take the union of the CD-based booleans.
+    # Build the correlation SMatrix in one pass.
+    # For celestial axes, the longitude and latitude share pixel dependencies
+    # (spherical rotation couples them), so those rows take the union of the CD-based booleans.
+    # `SMatrix` fills column-major, so element `k` lands at row `(k - 1) % N + 1` (the world axis)
+    #  and column `(k - 1) ÷ N + 1` (the pixel axis).
     return SMatrix{N, N, Bool}(ntuple(k -> begin
-        i = (k - 1) ÷ N + 1
-        j = (k - 1) % N + 1
-        if has_celestial && (i == li || i == la)
-            wcs.cd[li, j] != 0 || wcs.cd[la, j] != 0
+        w = (k - 1) % N + 1 # World axis (row)
+        p = (k - 1) ÷ N + 1 # Pixel axis (column)
+        if has_celestial && (w == li || w == la)
+            wcs.cd[li, p] != 0 || wcs.cd[la, p] != 0
         else
-            wcs.cd[i, j] != 0
+            wcs.cd[w, p] != 0
         end
     end, Val(N * N)))
 end
