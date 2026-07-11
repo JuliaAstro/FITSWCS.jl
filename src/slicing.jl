@@ -31,19 +31,21 @@ _is_kept(::KeepRange) = true
 """
     DropAxis{Float64}(pixel::Float64)
 
-A dropped pixel axis fixed at `pixel` in the original image.
+A dropped pixel axis fixed at `pixel` in the original image. `pixel` may be fractional.
+Unlike array slicing, freezing a WCS axis at a fractional pixel position
+is well defined (the transform is continuous in pixel space).
 """
 struct DropAxis
     pixel::Float64
 end
 _is_kept(::DropAxis) = false
 
-"""Normalize a slice argument (Colon, Integer, or AbstractRange) into `KeepAll`, `KeepRange`, or `DropAxis`."""
+"""Normalize a slice argument (Colon, Real, or AbstractRange) into `KeepAll`, `KeepRange`, or `DropAxis`."""
 _normalize_slice(::Colon) = KeepAll()
-_normalize_slice(s::Integer) = DropAxis(Float64(s))
+_normalize_slice(s::Real) = DropAxis(Float64(s))
 _normalize_slice(s::AbstractRange) = KeepRange(s)
 _normalize_slice(s) = throw(ArgumentError(
-    "slice must be an Integer, AbstractRange, or Colon, got $(typeof(s))"
+    "slice must be a Real, AbstractRange, or Colon, got $(typeof(s))"
 ))
 
 # ── Slice composition (for recursive slicing of SlicedWCSTransform) ─────────────
@@ -60,12 +62,12 @@ Used by `slice_wcs(::SlicedWCSTransform, ...)` to compose nested slices
 without wrapper nesting.
 """
 _compose_slices(::KeepAll, ::Colon) = KeepAll()
-_compose_slices(::KeepAll, k::Integer) = DropAxis(Float64(k))
+_compose_slices(::KeepAll, k::Real) = DropAxis(Float64(k))
 _compose_slices(::KeepAll, r::AbstractRange) = KeepRange(r)
 
 # old=KeepRange: sub-coordinate p_sub maps to parent p = a1 + s1·(p_sub - 1).
 _compose_slices(old::KeepRange, ::Colon) = old
-function _compose_slices(old::KeepRange, k::Integer)
+function _compose_slices(old::KeepRange, k::Real)
     a1 = first(old.range)
     s1 = step(old.range)
     return DropAxis(Float64(a1 + s1 * (k - 1)))
@@ -180,7 +182,9 @@ axis order (axis 1, axis 2, ..., axis N) and is one of:
   New CRPIX = CRPIX - (a - 1).
 - `a:s:b` (`StepRange`): keep the axis with stride `s`.
   CRPIX and the CD matrix column rescale by `s`.
-- `k` (`Integer`): drop the axis, fixing it at pixel `k`.
+- `k` (`Real`): drop the axis, fixing it at pixel `k`. Fractional positions
+  are allowed. The WCS transform is continuous in pixel space, so freezing an
+  axis between pixel centers is well defined.
 
 Returns a `SlicedWCSTransform` with dimensionality equal to the number of
 range arguments.

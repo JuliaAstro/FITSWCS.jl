@@ -187,6 +187,28 @@ end
             @test world_to_pixel(swcs, world) ≈ pix_sub
         end
     end
+
+    @testset "Drop one axis at a fractional pixel" begin
+        # Freezing an axis between pixel centers is well defined for a WCS.
+        swcs = slice_wcs(wcs, 5.5, 1:10)
+        @test pixel_n_dim(swcs) == 1
+        @test world_n_dim(swcs) == 1
+        # Kept Y world axis is unaffected by the fractional X drop (separable).
+        world = pixel_to_world(swcs, [1.0])
+        @test world ≈ [200.0 + 3 * (1 - 20)]
+        @test world_to_pixel(swcs, world) ≈ [1.0]
+        # The frozen axis sits exactly at the fractional pixel: evaluating the
+        # parent transform at (5.5, y) must reproduce the dropped world value.
+        @test pixel_to_world(wcs, [5.5, 1.0])[1] ≈ 100.0 + 2 * (5.5 - 10)
+
+        # Fractional drop composed onto an existing range slice: sub-pixel 2.5
+        # of 3:7 is parent pixel 3 + (2.5 - 1) = 4.5.
+        swcs2 = slice_wcs(slice_wcs(wcs, 3:7, 5:10), 2.5, :)
+        @test pixel_n_dim(swcs2) == 1
+        w2 = pixel_to_world(swcs2, [1.0])
+        @test w2 ≈ [200.0 + 3 * (5 - 20)]
+        @test world_to_pixel(swcs2, w2) ≈ [1.0]
+    end
 end
 
 # ──────────────────────────────────────────────────────────────────────────────
