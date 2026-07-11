@@ -47,6 +47,9 @@ module FITSWCS
 using LinearAlgebra: I, \
 using StaticArrays: SMatrix, SVector, StaticVector, MVector, MMatrix
 
+"""Abstract supertype for all WCS transforms."""
+abstract type AbstractWCSTransform end
+
 include("utilities.jl")
 include("projections.jl")
 include("lookup_tables.jl")
@@ -60,7 +63,13 @@ include("celestial.jl")
 include("parsing.jl")
 include("linear.jl")
 include("transforms.jl")
+include("slicing.jl")
+include("api.jl")
 
-export WCS, WCSTransform, pixel_to_world, world_to_pixel, wcsalts, WCS_all
+export WCS, WCS_all, AbstractWCSTransform, WCSTransform,
+       SlicedWCSTransform,
+       pixel_to_world, world_to_pixel,
+       pixel_n_dim, world_n_dim,
+       axis_correlation_matrix, slice_wcs
 
 end # module FITSWCS

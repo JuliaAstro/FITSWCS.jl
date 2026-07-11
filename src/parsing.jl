@@ -60,7 +60,7 @@ array indices the values are numerically identical; no offset is required.
 - `wcsname`    – human-readable WCS name (``WCSNAME`` keyword).  Not used
   internally.
 """
-struct WCSTransform{N, L, P <: Union{Nothing, AbstractProjection}, D <: AbstractDistortionPipeline, A <: AbstractAuxiliaryWCSData, O <: Union{Nothing, ObservationSpec}}
+struct WCSTransform{N, L, P <: Union{Nothing, AbstractProjection}, D <: AbstractDistortionPipeline, A <: AbstractAuxiliaryWCSData, O <: Union{Nothing, ObservationSpec}} <: AbstractWCSTransform
     naxis::Int
     crpix::SVector{N, Float64}
     crval::SVector{N, Float64}

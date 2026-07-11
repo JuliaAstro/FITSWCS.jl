@@ -90,6 +90,8 @@ const _hdr_tan_preserved = Dict(
 )
 const WCS_TAN_PRESERVED = WCS(_hdr_tan_preserved; preserve_units = true)
 
+const WCS_TAN_SLICED = slice_wcs(WCS_TAN, 1:512, 1:512)
+
 const _hdr_ait = Dict(
     "NAXIS"  => 2,
     "CTYPE1" => "GLON-AIT",  "CTYPE2" => "GLAT-AIT",
@@ -316,6 +318,7 @@ let g = SUITE["pixel_to_world"]
     g["TAN/scalar/SVector Float64"] = @benchmarkable pixel_to_world($WCS_TAN, $(SVector{2,Float64}(_pix_tan))) evals=100
     g["TAN/scalar/SVector Float32"] = @benchmarkable pixel_to_world($WCS_TAN, $(SVector{2,Float32}(Float32.(_pix_tan)))) evals=100
     g["TAN/scalar/Tuple"] = @benchmarkable pixel_to_world($WCS_TAN, $(Tuple(_pix_tan))) evals=100
+    g["TAN/scalar/sliced"] = @benchmarkable pixel_to_world($WCS_TAN_SLICED, $_pix_tan) evals=100
     g["AIT/scalar"] = @benchmarkable pixel_to_world($WCS_AIT, $_pix_ait) evals=100
     g["TAN-SIP/scalar"] = @benchmarkable pixel_to_world($WCS_SIP, $_pix_sip) evals=100
     g["TAN-SIP-PaperIV/scalar"] = @benchmarkable pixel_to_world($WCS_SIP_PAPERIV, $_pix_sip_paperiv) evals=100
@@ -336,6 +339,7 @@ end
 SUITE["world_to_pixel"] = BenchmarkGroup()
 let g = SUITE["world_to_pixel"]
     g["TAN/scalar"] = @benchmarkable world_to_pixel($WCS_TAN, $_world_tan) evals=100
+    g["TAN/scalar/sliced"] = @benchmarkable world_to_pixel($WCS_TAN_SLICED, $_world_tan) evals=100
     g["TAN/scalar/preserve_units"] = @benchmarkable world_to_pixel($WCS_TAN_PRESERVED, $(_world_tan * 3600)) evals=100
     g["AIT/scalar"] = @benchmarkable world_to_pixel($WCS_AIT, $_world_ait) evals=100
     g["TAN-SIP/scalar"] = @benchmarkable world_to_pixel($WCS_SIP, $_world_sip) evals=100
@@ -365,6 +369,16 @@ let g = SUITE["parsing"]
     g["WCS/grism/AWAV-GRA"] = @benchmarkable WCS($_hdr_grism) evals=5 samples=3
 end
 
+# ── slicing ──────────────────────────────────────────────────────────────────
+
+SUITE["slicing"] = BenchmarkGroup()
+let g = SUITE["slicing"]
+    g["slice/2-D spatial"] = @benchmarkable slice_wcs($WCS_TAN, $(10:512), $(15:512)) evals=100
+    g["slice/3-D drop spectral"] = @benchmarkable slice_wcs($WCS_CUBE, $(10:512), $(15:512), $5) evals=100
+    g["slice/3-D drop spatial"] = @benchmarkable slice_wcs($WCS_CUBE, $10, $15) evals=100
+    g["slice/2-D coupled-TAB"] = @benchmarkable slice_wcs($WCS_COUPLED_TAB, $(10:20), $(15:20)) evals=100
+    g["slice/2-D spatial recursive"] = @benchmarkable slice_wcs($WCS_TAN_SLICED, $(10:20), $(15:30)) evals=100
+end
 
 # ── If not on CI, show a nice table ──────────────────────────────────────────
 if get(ENV, "CI", "false") == "false"

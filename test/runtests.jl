@@ -3150,3 +3150,6 @@ include("regression_wcslib.jl")
 
 # Regression tests against stored Astropy values for projections without wcslib fixtures.
 include("regression_astropy_values.jl")
+
+# WCS slicing tests.
+include("slicing_tests.jl")
