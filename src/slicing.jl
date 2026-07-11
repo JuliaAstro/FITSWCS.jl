@@ -183,8 +183,7 @@ axis order (axis 1, axis 2, ..., axis N) and is one of:
 - `a:s:b` (`StepRange`): keep the axis with stride `s`.
   CRPIX and the CD matrix column rescale by `s`.
 - `k` (`Real`): drop the axis, fixing it at pixel `k`. Fractional positions
-  are allowed. The WCS transform is continuous in pixel space, so freezing an
-  axis between pixel centers is well defined.
+  are allowed.
 
 Returns a `SlicedWCSTransform` with dimensionality equal to the number of
 range arguments.
