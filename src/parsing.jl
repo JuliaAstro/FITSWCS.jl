@@ -543,9 +543,7 @@ function _merge_spectral_aux(aux::NoAuxiliaryWCSData, spectral::SpectralWCSData)
     return AuxiliaryWCSData(spectral = spectral)
 end
 function _merge_spectral_aux(aux::AuxiliaryWCSData, spectral::AbstractSpectralWCSData)
-    return AuxiliaryWCSData(det2im = aux.det2im, cpdis = aux.cpdis,
-                            tabular = aux.tabular, spectral = spectral,
-                            time = aux.time, grism = aux.grism)
+    return AuxiliaryWCSData(; aux.det2im, aux.cpdis, aux.tabular, spectral, aux.time, aux.grism)
 end
 
 # ── Grism spec merge ──────────────────────────────────────────────────────────
@@ -557,9 +555,7 @@ function _merge_grism_aux(aux::NoAuxiliaryWCSData, grism::GrismWCSData)
     return AuxiliaryWCSData(grism = grism)
 end
 function _merge_grism_aux(aux::AuxiliaryWCSData, grism::AbstractGrismWCSData)
-    return AuxiliaryWCSData(det2im = aux.det2im, cpdis = aux.cpdis,
-                            tabular = aux.tabular, spectral = aux.spectral,
-                            time = aux.time, grism = grism)
+    return AuxiliaryWCSData(; aux.det2im, aux.cpdis, aux.tabular, aux.spectral, aux.time, grism)
 end
 
 # ── Time axis spec construction ────────────────────────────────────────────────
@@ -588,12 +584,10 @@ function _merge_time_aux(aux::NoAuxiliaryWCSData, time::NoTimeWCSData)
     return aux
 end
 function _merge_time_aux(aux::NoAuxiliaryWCSData, time::TimeWCSData)
-    return AuxiliaryWCSData(time = time)
+    return AuxiliaryWCSData(; time)
 end
 function _merge_time_aux(aux::AuxiliaryWCSData, time::AbstractTimeWCSData)
-    return AuxiliaryWCSData(det2im = aux.det2im, cpdis = aux.cpdis,
-                            tabular = aux.tabular, spectral = aux.spectral,
-                            time = time, grism = aux.grism)
+    return AuxiliaryWCSData(; aux.det2im, aux.cpdis, aux.tabular, aux.spectral, time, aux.grism)
 end
 
 function _build_observation_spec(header::AbstractDict, alt_str::AbstractString)
@@ -874,7 +868,7 @@ wcs = WCS(hdr)
 ```
 """
 function WCS(header::AbstractDict; fobj = nothing, alt::Char = ' ', minerr::Real = 0.0, preserve_units::Bool = false)
-    if alt != ' ' && !(('A' <= alt <= 'Z'))
+    if alt != ' ' && !('A' <= alt <= 'Z')
         throw(ArgumentError("alt must be ' ' or 'A'–'Z', got $(repr(alt))"))
     end
     alt_str = alt == ' ' ? "" : string(alt)
