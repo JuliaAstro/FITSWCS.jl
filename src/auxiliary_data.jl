@@ -109,7 +109,7 @@ function _lookup_table_from_image(data::AbstractMatrix, header::AbstractDict, tr
 end
 
 function _paper_iv_auxiliary_data(header::AbstractDict, loader; alt::Char = ' ', minerr::Real = 0.0)
-    det2im_specs, cpdis_specs = _paper_iv_lookup_specs(header; alt = alt, minerr = minerr)
+    det2im_specs, cpdis_specs = _paper_iv_lookup_specs(header; alt, minerr)
 
     # Resolve all referenced image arrays through the backend-provided loader.
     det2im = ntuple(i -> isnothing(det2im_specs[i]) ? nothing : loader(det2im_specs[i]), 2)
@@ -118,7 +118,7 @@ function _paper_iv_auxiliary_data(header::AbstractDict, loader; alt::Char = ' ',
     if all(isnothing, det2im) && all(isnothing, cpdis)
         return NoAuxiliaryWCSData()
     end
-    return AuxiliaryWCSData(det2im = det2im, cpdis = cpdis)
+    return AuxiliaryWCSData(; det2im, cpdis)
 end
 
 function _external_auxiliary_data(
@@ -128,8 +128,8 @@ function _external_auxiliary_data(
         alt::Char = ' ',
         minerr::Real = 0.0,
     )
-    paper_iv = _paper_iv_auxiliary_data(header, paper_iv_loader; alt = alt, minerr = minerr)
-    tabular = _tabular_auxiliary_data(header, tabular_loader; alt = alt)
+    paper_iv = _paper_iv_auxiliary_data(header, paper_iv_loader; alt, minerr)
+    tabular = _tabular_auxiliary_data(header, tabular_loader; alt)
 
     # Preserve the cheap no-auxiliary payload when neither external family is present.
     paper_iv isa NoAuxiliaryWCSData && tabular isa NoTabularWCSData &&
@@ -137,7 +137,7 @@ function _external_auxiliary_data(
 
     det2im = paper_iv isa AuxiliaryWCSData ? paper_iv.det2im : (nothing, nothing)
     cpdis = paper_iv isa AuxiliaryWCSData ? paper_iv.cpdis : (nothing, nothing)
-    return AuxiliaryWCSData(det2im = det2im, cpdis = cpdis, tabular = tabular)
+    return AuxiliaryWCSData(; det2im, cpdis, tabular)
 end
 
 function _header_references_tabular_axis(header::AbstractDict, alt_str::AbstractString)
