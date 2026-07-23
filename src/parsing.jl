@@ -1055,10 +1055,20 @@ function WCS(header::AbstractDict; fobj = nothing, alt::Char = ' ', minerr::Real
     end
 
     # ── Reference-frame metadata (pass-through, not used internally) ──────────
-    radesys = String(get(header, "RADESYS$(alt_str)",
-                     get(header, "RADESYS", "ICRS")))
     equinox = Float64(get(header, "EQUINOX$(alt_str)",
                       get(header, "EQUINOX", NaN)))
+    radesys_card = get(header, "RADESYS$(alt_str)", get(header, "RADESYS", nothing))
+    if radesys_card !== nothing
+        radesys = String(radesys_card)
+    elseif lon_axis > 0 && first(parse_ctype(ctype[lon_axis])) in ("RA", "ELON", "HLON")
+        # FITS WCS Paper II, Section 3.1: for equatorial and ecliptic systems an
+        # absent RADESYS defaults from EQUINOX — FK4 before 1984.0, FK5 from
+        # 1984.0 on, and ICRS when EQUINOX is also absent.
+        radesys = isnan(equinox) ? "ICRS" : (equinox < 1984.0 ? "FK4" : "FK5")
+    else
+        # RADESYS does not apply to non-equatorial/ecliptic coordinate systems.
+        radesys = ""
+    end
     wcsname = String(get(header, "WCSNAME$(alt_str)",
                      get(header, "WCSNAME", "")))
 
@@ -1087,7 +1097,9 @@ end
 Construct a transform from WCS.jl-style keyword vectors and matrices.
 
 Supported keywords are `crpix`, `crval`, `cdelt`, `ctype`, `cunit`, `pc`, `cd`,
-`crota`, `lonpole`, `latpole`, `radesys`, `equinox`, `wcsname`.
+`crota`, `pv`, `lonpole`, `latpole`, `radesys`, `equinox`, `wcsname`.
+`pv` takes a vector of `(axis, parameter, value)` tuples that map to the
+corresponding `PVi_m` keywords.
 More specialized wcslib fields remain unsupported in this pure-Julia constructor.
 """
 function WCS(naxis::Integer; preserve_units::Bool = false, kwds...)
@@ -1124,6 +1136,10 @@ function _constructor_keyword_to_header!(header::Dict{String,Any},
         _put_matrix_values!(header, "PC", value, naxis)
     elseif key === :cd
         _put_matrix_values!(header, "CD", value, naxis)
+    elseif key === :pv
+        for (i, m, v) in value
+            header["PV$(Int(i))_$(Int(m))"] = Float64(v)
+        end
     elseif key === :lonpole
         header["LONPOLE"] = value
     elseif key === :latpole
