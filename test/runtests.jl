@@ -3143,6 +3143,63 @@ end
             @test world2 ≈ world  atol=1e-10
         end
     end
+@testset "RADESYS defaulting" begin
+    # FITS WCS Paper II, Section 3.1: for equatorial and ecliptic systems an
+    # absent RADESYS defaults from EQUINOX — FK4 before 1984.0, FK5 from
+    # 1984.0 on, and ICRS when EQUINOX is also absent.
+    @test WCS(2; ctype = ["RA---AIR", "DEC--AIR"]).radesys == "ICRS"
+    @test WCS(2; ctype = ["RA---AIR", "DEC--AIR"], equinox = 1888.67).radesys == "FK4"
+    @test WCS(2; ctype = ["RA---AIR", "DEC--AIR"], equinox = 2000).radesys == "FK5"
+    @test WCS(2; ctype = ["ELON-AIT", "ELAT-AIT"], equinox = 2000).radesys == "FK5"
+
+    # RADESYS does not apply to non-equatorial/ecliptic coordinate systems.
+    @test WCS(2; ctype = ["GLON-CAR", "GLAT-CAR"]).radesys == ""
+    @test WCS(2; ctype = ["X", "Y"]).radesys == ""
+
+    # An explicit RADESYS always wins.
+    @test WCS(2; ctype = ["RA---AIR", "DEC--AIR"], radesys = "UNK").radesys == "UNK"
+    @test WCS(2; ctype = ["RA---AIR", "DEC--AIR"], radesys = "ICRS", equinox = 1950).radesys == "ICRS"
+
+    # The header-dict parsing path applies the same defaulting.
+    hdr = Dict{String,Any}(
+        "NAXIS" => 2,
+        "CTYPE1" => "RA---TAN", "CTYPE2" => "DEC--TAN",
+        "CRPIX1" => 1.0, "CRPIX2" => 1.0,
+        "CRVAL1" => 0.0, "CRVAL2" => 0.0,
+        "CDELT1" => 1.0, "CDELT2" => 1.0,
+        "EQUINOX" => 1950.0,
+    )
+    @test WCS(hdr).radesys == "FK4"
+    hdr["RADESYS"] = "FK5"
+    @test WCS(hdr).radesys == "FK5"
+end
+
+@testset "pv keyword constructor" begin
+    wcs = WCS(2;
+        cdelt = [-0.066667, 0.066667],
+        ctype = ["RA---AIR", "DEC--AIR"],
+        crpix = [-234.75, 8.3393],
+        crval = [0.0, -90.0],
+        pv = [(2, 1, 45.0)],
+    )
+    @test wcs isa WCSTransform
+    @test wcs.projection isa FITSWCS.AIR
+    @test wcs.projection.theta_b ≈ 45.0
+
+    # Equivalent to spelling out the corresponding PVi_m header keyword.
+    hdr = Dict{String,Any}(
+        "NAXIS" => 2,
+        "CTYPE1" => "RA---AIR", "CTYPE2" => "DEC--AIR",
+        "CRPIX1" => -234.75, "CRPIX2" => 8.3393,
+        "CRVAL1" => 0.0, "CRVAL2" => -90.0,
+        "CDELT1" => -0.066667, "CDELT2" => 0.066667,
+        "PV2_1" => 45.0,
+    )
+    fromheader = WCS(hdr)
+    p = [10.0, 20.0]
+    @test pixel_to_world(wcs, p) ≈ pixel_to_world(fromheader, p)
+end
+
 end  # @testset "FITSWCS"
 
 # Regression tests against wcslib reference values (Milestone 5).
