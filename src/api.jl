@@ -33,9 +33,7 @@ matching the APE-14 convention.  For `SlicedWCSTransform`: the parent's
 matrix indexed by the kept axes.
 """
 function axis_correlation_matrix(wcs::WCSTransform{N}) where {N}
-    # If any pre-linear distortion is present (SIP, D2IM, CPDIS), we must be
-    # conservative: distortions can introduce arbitrary cross-axis coupling
-    # that isn't captured by the CD matrix alone.
+    # Any distortion stage may introduce cross-axis coupling not captured by CD.
     if has_distortion(wcs.pipeline)
         return fill(true, SMatrix{N, N, Bool})
     end

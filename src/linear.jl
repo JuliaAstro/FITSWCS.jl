@@ -3,7 +3,8 @@ Linear pixel-to-intermediate and intermediate-to-pixel transforms.
 
 Paper I (Greisen & Calabretta 2002), Section 2.
 
-The intermediate world coordinate xᵢ is related to pixel coordinate pⱼ by
+Without a sequent distortion, the intermediate world coordinate xᵢ is related
+to pixel coordinate pⱼ by
 
     xᵢ = Σⱼ CDᵢⱼ (pⱼ − CRPIXⱼ)
 
@@ -13,6 +14,12 @@ units of their corresponding `CRVALᵢ` (typically degrees for celestial axes).
 The inverse is
 
     pⱼ = CRPIXⱼ + Σᵢ (CD⁻¹)ⱼᵢ xᵢ
+
+With TPV or a Paper IV sequent distortion D, WCSLIB instead evaluates
+
+    q = PC (p − CRPIX),    x = CDELT ⊙ D(q)
+
+so the PC/CDELT decomposition must be preserved.
 """
 
 """
@@ -31,9 +38,27 @@ function pixel_to_intermediate(wcs::WCSTransform{N}, pixel::AbstractVector) wher
     T = _coordinate_float_type(pixel)
     focal = pixel_to_focal(wcs.pipeline, pixel, Val(N))
     delta = SVector{N,T}(ntuple(i -> T(focal[i]) - T(wcs.crpix[i]), N))
-    # Convert CD to T so the matrix-vector product preserves input precision.
-    cd_T = SMatrix{N, N, T}(wcs.cd)
-    return cd_T * delta
+
+    # The ordinary affine path can use the combined CD matrix directly.
+    if !(wcs.projection isa TPV) && !has_sequent_distortion(wcs.pipeline)
+        cd_T = SMatrix{N, N, T}(wcs.cd)
+        return cd_T * delta
+    end
+
+    # Sequent distortions operate after PC and before the per-axis CDELT scale.
+    pc_T = SMatrix{N, N, T}(wcs.pc)
+    coord = pc_T * delta
+    if wcs.projection isa TPV
+        lon = wcs.lon_axis
+        lat = wcs.lat_axis
+        x = _evaluate_tpv_polynomial(wcs.projection.xcoeff, coord[lon], coord[lat])
+        y = _evaluate_tpv_polynomial(wcs.projection.ycoeff, coord[lat], coord[lon])
+        coord = SVector{N, T}(ntuple(i -> i == lon ? T(x) : i == lat ? T(y) : coord[i], N))
+    end
+    coord = apply_sequent_distortion(wcs.pipeline, coord)
+
+    # Apply the final scale in the input coordinate's floating-point type.
+    return coord .* SVector{N, T}(wcs.cdelt)
 end
 
 
@@ -47,11 +72,26 @@ if the matrix is singular.
 """
 function intermediate_to_pixel(wcs::WCSTransform{N}, intermediate::StaticVector{N}) where {N}
     T = _coordinate_float_type(intermediate)
-    # Undo the linear matrix to recover focal/image-plane pixel coordinates.
-    # Convert CD and CRPIX to T so that the output preserves the input precision.
-    cd_T = SMatrix{N, N, T}(wcs.cd)
     cpix_T = SVector{N, T}(wcs.crpix)
-    focal = cpix_T .+ (cd_T \ intermediate)
+
+    # The ordinary affine path can invert the combined CD matrix directly.
+    if !(wcs.projection isa TPV) && !has_sequent_distortion(wcs.pipeline)
+        cd_T = SMatrix{N, N, T}(wcs.cd)
+        focal = cpix_T .+ (cd_T \ intermediate)
+        return focal_to_pixel(wcs.pipeline, focal, Val(N))
+    end
+
+    # Undo CDELT, sequent TPD, and TPV before solving the PC matrix.
+    coord = intermediate ./ SVector{N, T}(wcs.cdelt)
+    coord = invert_sequent_distortion(wcs.pipeline, coord)
+    if wcs.projection isa TPV
+        lon = wcs.lon_axis
+        lat = wcs.lat_axis
+        x, y = _tpv_inverse(wcs.projection.xcoeff, wcs.projection.ycoeff, coord[lon], coord[lat])
+        coord = SVector{N, T}(ntuple(i -> i == lon ? T(x) : i == lat ? T(y) : coord[i], N))
+    end
+    pc_T = SMatrix{N, N, T}(wcs.pc)
+    focal = cpix_T .+ (pc_T \ coord)
 
     return focal_to_pixel(wcs.pipeline, focal, Val(N))
 end

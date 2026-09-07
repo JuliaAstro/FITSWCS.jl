@@ -36,6 +36,9 @@ array indices the values are numerically identical; no offset is required.
 - `cd`         – combined CD matrix (naxis × naxis), where
                  `cd[i,j] = CDELT_i * PC_i_j` (or the explicit `CD_i_j` value).
                  Units match `cunit`.
+- `pc`         – linear matrix applied before a sequent distortion.
+- `cdelt`      – per-axis scale applied after a sequent distortion.  Explicit
+                 CD headers use `pc = cd` and unit `cdelt`.
 - `ctype`      – FITS `CTYPEi` strings, length `naxis`.
 - `cunit`      – FITS `CUNITi` strings (empty string means degrees for
                  celestial axes), length `naxis`.
@@ -49,7 +52,7 @@ array indices the values are numerically identical; no offset is required.
                  Paper II.  Precomputed during construction.
 - `projection` – spherical projection for the celestial axes, or `nothing` for
                  purely linear WCS.
-- `pipeline`   – pre-linear pixel/focal-plane distortion pipeline.
+- `pipeline`   – distortion stages surrounding the linear transform.
 - `aux`        – resolved auxiliary WCS data, or `NoAuxiliaryWCSData`.
 - `lon_axis`   – 1-based index of the longitude axis; 0 if no celestial axes.
 - `lat_axis`   – 1-based index of the latitude axis; 0 if no celestial axes.
@@ -65,6 +68,8 @@ struct WCSTransform{N, L, P <: Union{Nothing, AbstractProjection}, D <: Abstract
     crpix::SVector{N, Float64}
     crval::SVector{N, Float64}
     cd::SMatrix{N, N, Float64, L}       # naxis x naxis
+    pc::SMatrix{N, N, Float64, L}
+    cdelt::SVector{N, Float64}
     ctype::Vector{String}
     cunit::Vector{String}
     lonpole::Float64          # degrees; phi_p (Paper II)
@@ -85,6 +90,19 @@ struct WCSTransform{N, L, P <: Union{Nothing, AbstractProjection}, D <: Abstract
     # Set to all 1.0 when preserve_units=false.
     preserve_units::Bool
     unit_scaling::SVector{N, Float64}
+end
+
+function WCSTransform(naxis::Int, crpix::SVector{N, Float64}, crval::SVector{N, Float64},
+                      cd::SMatrix{N, N, Float64, L}, ctype::Vector{String}, cunit::Vector{String},
+                      lonpole::Float64, latpole::Float64, alpha_p::Float64, delta_p::Float64,
+                      projection::P, pipeline::D, aux::A, lon_axis::Int, lat_axis::Int, obs::O,
+                      radesys::String, equinox::Float64, wcsname::String, preserve_units::Bool,
+                      unit_scaling::SVector{N, Float64}) where {N, L, P, D, A, O}
+    # Preserve the former positional constructor by treating its CD as an explicit matrix.
+    return WCSTransform(naxis, crpix, crval, cd, cd, ones(SVector{N, Float64}),
+                        ctype, cunit, lonpole, latpole, alpha_p, delta_p,
+                        projection, pipeline, aux, lon_axis, lat_axis, obs,
+                        radesys, equinox, wcsname, preserve_units, unit_scaling)
 end
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -182,13 +200,15 @@ function projection_from_code(code::AbstractString)
     c == "HPX" && return HPX()
     c == "XPH" && return XPH()
     c == "TPV" && return TPV()
-    c == "TPD" && return TPV()
     return UnknownProjection(c)
 end
 
 function projection_from_header(code::AbstractString, header::AbstractDict,
                                  lon_axis::Int, lat_axis::Int, alt::Char)
     c = uppercase(strip(code))
+
+    # TPD is declared through CPDIS/CQDIS rather than as a CTYPE projection.
+    c == "TPD" && throw(ArgumentError("TPD is a Paper IV distortion function, not a celestial projection code"))
 
     if c == "AZP"
         alt_str = alt == ' ' ? "" : string(alt)
@@ -286,16 +306,12 @@ function projection_from_header(code::AbstractString, header::AbstractDict,
         return HPX(H, K)
     end
 
-    # TPV/TPD: TAN + sequent polynomial distortion encoded in PVi_m keywords.
+    # TPV: TAN + sequent polynomial distortion encoded in PVi_m keywords.
     # Coefficients are collected from PV keywords on both celestial axes.
-    if c == "TPV" || c == "TPD"
+    if c == "TPV"
         alt_str = alt == ' ' ? "" : string(alt)
-        xcoeff_raw = _collect_tpv_coeffs(header, lon_axis, alt_str)
-        ycoeff_raw = _collect_tpv_coeffs(header, lat_axis, alt_str)
-        # If both empty, return identity TPV (= plain TAN).
-        xcoeff = isempty(xcoeff_raw) ? Float64[0.0, 1.0] : xcoeff_raw
-        ycoeff = isempty(ycoeff_raw) ? Float64[0.0, 0.0, 1.0] : ycoeff_raw
-        return TPV(xcoeff, ycoeff)
+        return TPV(_collect_tpv_coeffs(header, lon_axis, alt_str),
+                   _collect_tpv_coeffs(header, lat_axis, alt_str))
     end
 
     # Other supported projections currently have no parsed PV parameters.
@@ -305,14 +321,14 @@ end
 """
     _collect_tpv_coeffs(header, axis, alt_str) -> Vector{Float64}
 
-Collect TPV/TPD polynomial coefficients from `PV{axis}_m` keywords for
-``m = 0..59`` (the TPD coefficient range).  Gaps are zero-filled so the
+Collect TPV polynomial coefficients from `PV{axis}_m` keywords for
+``m = 0..39``.  Gaps are zero-filled so the
 returned vector is indexed directly by ``m`` (i.e. `result[m+1] = PVm`).
 Returns an empty vector if no PV keywords are found on this axis.
 """
 function _collect_tpv_coeffs(header::AbstractDict, axis::Int, alt_str::AbstractString)
     coeff = Float64[]
-    for m in 0:59
+    for m in 0:39
         key = "PV$(axis)_$(m)$(alt_str)"
         if haskey(header, key)
             while length(coeff) < m
@@ -321,6 +337,11 @@ function _collect_tpv_coeffs(header::AbstractDict, axis::Int, alt_str::AbstractS
             push!(coeff, Float64(header[key]))
         end
     end
+
+    # TPV is limited to seventh degree even though the TPD basis has 60 terms.
+    invalid = Regex("^PV$(axis)_([4-9][0-9]|[1-9][0-9]{2,})$(alt_str)\$")
+    any(key -> key isa AbstractString && occursin(invalid, uppercase(String(key))), keys(header)) &&
+        throw(ArgumentError("TPV coefficients must use parameter numbers 0 through 39"))
     return coeff
 end
 
@@ -838,10 +859,8 @@ The primary WCS (no suffix) uses `alt=' '`.  Alternate versions use `alt='A'`,
 Each call to `WCS` returns exactly one `WCSTransform` for the selected
 alternate.  To extract all alternates, call `WCS` once per character.
 
-`minerr` is reserved for Paper IV distortion support: when auxiliary lookup
-tables are implemented, distortion components whose declared error estimate is
-below `minerr` may be skipped.  It is currently passed through to auxiliary-data
-resolver methods but is not used by the core header-only parser.
+`minerr` skips Paper IV lookup or TPD distortion components whose declared
+error estimate is below the threshold.
 
 `preserve_units` controls whether `pixel_to_world` returns world coordinates in
 canonical units (`false`, default) or in the original header CUNIT (`true`).
@@ -956,13 +975,16 @@ function WCS(header::AbstractDict; fobj = nothing, alt::Char = ' ', minerr::Real
     projection = isempty(proj_code) ? nothing :
         projection_from_header(proj_code, header, lon_axis, lat_axis, alt)
 
-    # ── Parse optional SIP distortion before building transform output ────────
-    # TPV/TPD takes precedence over SIP (SCAMP convention).
-    if proj_code in ("TPV", "TPD")
+    # ── Parse prior and sequent distortions before building output ──────────────
+    # TPV takes precedence over SIP in legacy SCAMP headers.
+    if proj_code == "TPV"
         _remove_sip_keywords!(header, alt_str)
     end
     sip = parse_sip_distortion(header, crpix, naxis, alt)
-    pipeline = distortion_pipeline(sip, aux)
+    tpd_pre, tpd_seq = parse_tpd_distortions(header, naxis, alt, minerr)
+    proj_code == "TPV" && any(!isnothing, tpd_seq) &&
+        throw(ArgumentError("TPV cannot be combined with a CQDIS sequent distortion"))
+    pipeline = distortion_pipeline(sip, aux, tpd_pre, tpd_seq)
 
     # ── Normalize crval to canonical units before building spectral specs ─────
     # TAB axes are skipped: their crval values are lookup-table indices, not
@@ -1012,6 +1034,21 @@ function WCS(header::AbstractDict; fobj = nothing, alt::Char = ' ', minerr::Real
                 cd[row, g.axis] *= g.cdelt_scale
             end
         end
+    end
+
+    # Preserve PC and CDELT separately only where a sequent distortion needs them.
+    has_cd_keywords = has_indexed_wcs_keyword(header, "CD", naxis, alt_str)
+    needs_linear_split = projection isa TPV || has_sequent_distortion(pipeline)
+    linear_cdelt = has_cd_keywords || !needs_linear_split ? ones(Float64, naxis) : cdelt .* unit_scaling_vec
+    pc = if has_cd_keywords || !needs_linear_split
+        copy(cd)
+    else
+        any(iszero, linear_cdelt) && throw(ArgumentError("CDELT values must be nonzero with a sequent distortion"))
+        pre = copy(cd)
+        for i in 1:naxis
+            pre[i, :] ./= linear_cdelt[i]
+        end
+        pre
     end
 
     # ── Celestial pole parameters ─────────────────────────────────────────────
@@ -1080,6 +1117,8 @@ function WCS(header::AbstractDict; fobj = nothing, alt::Char = ' ', minerr::Real
         SVector{naxis, Float64}(crpix),
         SVector{naxis, Float64}(crval),
         SMatrix{naxis, naxis, Float64, naxis * naxis}(cd),
+        SMatrix{naxis, naxis, Float64, naxis * naxis}(pc),
+        SVector{naxis, Float64}(linear_cdelt),
         ctype, cunit,
         lonpole, latpole, alpha_p, delta_p,
         projection, pipeline, aux, lon_axis, lat_axis, obs,

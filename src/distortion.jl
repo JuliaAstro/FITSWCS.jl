@@ -23,46 +23,66 @@ struct SIPDistortion
     bp::Union{Nothing, Matrix{Float64}}
 end
 
+"""
+    TPDDistortion
+
+One axis of a Paper IV Template Polynomial Distortion.  `axmap`, `offset`, and
+`scale` define the independent variables.  Forward and optional reverse
+coefficients use the 60-term TPD basis.  By default the polynomial is an
+additive correction; `docorr=false` makes it return the corrected coordinate
+directly.
+"""
+struct TPDDistortion{M, A <: Union{Nothing, SMatrix{2, 3, Float64, 6}}}
+    axmap::SVector{M, Int}
+    offset::SVector{M, Float64}
+    scale::SVector{M, Float64}
+    aux::A
+    forward::Vector{Float64}
+    reverse::Union{Nothing, Vector{Float64}}
+    docorr::Bool
+end
+
 # ──────────────────────────────────────────────────────────────────────────────
 
-"""Abstract supertype for pre-linear pixel/focal-plane distortion pipelines."""
+"""Abstract supertype for distortion pipelines surrounding the linear transform."""
 abstract type AbstractDistortionPipeline end
 
-"""Identity distortion pipeline for WCS transforms with no pre-linear distortion."""
+"""Identity distortion pipeline for WCS transforms with no distortion stages."""
 struct NoDistortionPipeline <: AbstractDistortionPipeline end
 
 """
     DistortionPipeline
 
-Pre-linear distortion pipeline.  Detector-to-image lookup tables are applied
-first; SIP and CPDIS offsets are then evaluated at the detector-corrected
-coordinate before the linear WCS matrix.
+Distortion pipeline surrounding the linear WCS matrix.  Detector-to-image
+lookup tables, SIP, CPDIS lookup offsets, and prior TPD are applied before PC.
+Sequent TPD is applied after PC and before CDELT.
 """
-struct DistortionPipeline{S <: Union{Nothing, SIPDistortion}, D <: Tuple, C <: Tuple} <: AbstractDistortionPipeline
+struct DistortionPipeline{S <: Union{Nothing, SIPDistortion}, D <: Tuple, C <: Tuple, P <: Tuple, Q <: Tuple} <: AbstractDistortionPipeline
     det2im::D
     sip::S
     cpdis::C
+    tpd_pre::P
+    tpd_seq::Q
 end
 
 DistortionPipeline(sip::SIPDistortion) =
-    DistortionPipeline{typeof(sip), Tuple{Nothing, Nothing}, Tuple{Nothing, Nothing}}((nothing, nothing), sip, (nothing, nothing))
+    DistortionPipeline((nothing, nothing), sip, (nothing, nothing), (), ())
 
-function distortion_pipeline(sip::Union{Nothing, SIPDistortion}, ::NoAuxiliaryWCSData)
-    # Header-only WCS uses the existing no-op or SIP-only pipeline.
-    return distortion_pipeline(sip)
-end
+function distortion_pipeline(sip::Union{Nothing, SIPDistortion}, aux::AbstractAuxiliaryWCSData, tpd_pre::Tuple, tpd_seq::Tuple)
+    # External lookup tables are absent from header-only auxiliary payloads.
+    det2im = aux isa AuxiliaryWCSData && aux.det2im isa Tuple && length(aux.det2im) == 2 ? aux.det2im : (nothing, nothing)
+    cpdis = aux isa AuxiliaryWCSData && aux.cpdis isa Tuple && length(aux.cpdis) == 2 ? aux.cpdis : (nothing, nothing)
 
-function distortion_pipeline(sip::Union{Nothing, SIPDistortion}, aux::AuxiliaryWCSData)
-    det2im = aux.det2im isa Tuple && length(aux.det2im) == 2 ? aux.det2im : (nothing, nothing)
-    cpdis = aux.cpdis isa Tuple && length(aux.cpdis) == 2 ? aux.cpdis : (nothing, nothing)
-
-    # Avoid allocating a pipeline for auxiliary payloads that contain only TAB data.
-    if isnothing(sip) && all(isnothing, det2im) && all(isnothing, cpdis)
+    # Avoid allocating a pipeline when every distortion stage is empty.
+    if isnothing(sip) && all(isnothing, det2im) && all(isnothing, cpdis) &&
+            all(isnothing, tpd_pre) && all(isnothing, tpd_seq)
         return NoDistortionPipeline()
     end
 
-    # Preserve exact tuple types so no-lookup and partial-lookup stages stay concrete.
-    return DistortionPipeline{typeof(sip), typeof(det2im), typeof(cpdis)}(det2im, sip, cpdis)
+    # Preserve empty TPD stages explicitly for cheap common-case dispatch.
+    prior = all(isnothing, tpd_pre) ? () : tpd_pre
+    sequent = all(isnothing, tpd_seq) ? () : tpd_seq
+    return DistortionPipeline(det2im, sip, cpdis, prior, sequent)
 end
 
 function has_sip_keywords(header::AbstractDict, alt_str::AbstractString)
@@ -128,6 +148,107 @@ function parse_sip_distortion(header::AbstractDict, crpix::Vector{Float64}, naxi
     return SIPDistortion(SVector{2, Float64}(crpix[1:2]), a, b, ap, bp)
 end
 
+function _collect_tpd_coefficients(header::AbstractDict, prefix::AbstractString, direction::AbstractString)
+    coeff = Float64[]
+
+    # Preserve coefficient numbering while zero-filling omitted terms.
+    for m in 0:59
+        key = "$(prefix).TPD.$(direction).$(m)"
+        haskey(header, key) || continue
+        while length(coeff) < m
+            push!(coeff, 0.0)
+        end
+        push!(coeff, Float64(header[key]))
+    end
+    return coeff
+end
+
+function _tpd_auxiliary_matrix(header::AbstractDict, prefix::AbstractString)
+    has_aux = any(haskey(header, "$(prefix).AUX.$(k).COEFF.$(m)") for k in 1:2, m in 0:2)
+    has_aux || return nothing
+
+    # WCSLIB defaults the auxiliary transform to the two-dimensional identity.
+    aux = zeros(Float64, 2, 3)
+    aux[1, 2] = 1.0
+    aux[2, 3] = 1.0
+    for k in 1:2, m in 0:2
+        key = "$(prefix).AUX.$(k).COEFF.$(m)"
+        haskey(header, key) && (aux[k, m + 1] = Float64(header[key]))
+    end
+    return SMatrix{2, 3, Float64, 6}(aux)
+end
+
+function _valid_tpd_parameter_field(field::AbstractString)
+    field in ("DOCORR", "NAXES") && return true
+    occursin(r"^(AXIS|OFFSET|SCALE)\.[1-9][0-9]*$", field) && return true
+    occursin(r"^TPD\.(FWD|REV)\.([0-9]|[1-5][0-9])$", field) && return true
+    return occursin(r"^AUX\.[12]\.COEFF\.[0-2]$", field)
+end
+
+function _build_tpd_distortion(header::AbstractDict, prefix::AbstractString, naxis::Int, ::Val{M}) where {M}
+    # Resolve the independent-axis map and its normalization parameters.
+    axmap = SVector{M, Int}(ntuple(k -> Int(get(header, "$(prefix).AXIS.$(k)", k)), M))
+    all(i -> 1 <= i <= naxis, axmap) || throw(ArgumentError("$prefix axis map contains an axis outside 1:$naxis"))
+    length(unique(axmap)) == M || throw(ArgumentError("$prefix axis map contains duplicate axes"))
+    offset = SVector{M, Float64}(ntuple(k -> Float64(get(header, "$(prefix).OFFSET.$(k)", 0.0)), M))
+    scale = SVector{M, Float64}(ntuple(k -> Float64(get(header, "$(prefix).SCALE.$(k)", 1.0)), M))
+
+    # TPD forward coefficients are required structurally but may all be zero.
+    forward = _collect_tpd_coefficients(header, prefix, "FWD")
+    reverse_raw = _collect_tpd_coefficients(header, prefix, "REV")
+    reverse = isempty(reverse_raw) ? nothing : reverse_raw
+    aux = _tpd_auxiliary_matrix(header, prefix)
+    docorr = Int(get(header, "$(prefix).DOCORR", 1)) != 0
+    return TPDDistortion(axmap, offset, scale, aux, forward, reverse, docorr)
+end
+
+function _parse_tpd_axis(header::AbstractDict, axis::Int, naxis::Int, alt_str::AbstractString,
+                         dist_prefix::AbstractString, param_prefix::AbstractString,
+                         error_prefix::AbstractString, minerr::Real)
+    dist_key = "$(dist_prefix)$(axis)$(alt_str)"
+    haskey(header, dist_key) || return nothing
+    dtype = uppercase(strip(String(header[dist_key])))
+    if dtype == "LOOKUP"
+        dist_prefix == "CPDIS" && return nothing
+        throw(ArgumentError("sequent LOOKUP distortion $dist_key is not supported"))
+    end
+    dtype == "TPD" || throw(ArgumentError("unsupported Paper IV distortion type $(header[dist_key]) in $dist_key"))
+
+    # Error thresholds suppress the complete distortion on this axis.
+    error_key = "$(error_prefix)$(axis)$(alt_str)"
+    Float64(get(header, error_key, 0.0)) < Float64(minerr) && return nothing
+
+    prefix = "$(param_prefix)$(axis)$(alt_str)"
+    naxes_key = "$(prefix).NAXES"
+    haskey(header, naxes_key) || throw(ArgumentError("TPD distortion $dist_key requires $naxes_key"))
+    nhat = Int(header[naxes_key])
+    nhat in (1, 2) || throw(ArgumentError("$naxes_key must be 1 or 2, got $nhat"))
+
+    # Reject misspelled or unsupported TPD parameter records.
+    dotted_prefix = "$(prefix)."
+    for key in keys(header)
+        key isa AbstractString || continue
+        startswith(key, dotted_prefix) || continue
+        field = key[length(dotted_prefix) + 1:end]
+        _valid_tpd_parameter_field(field) || throw(ArgumentError("unrecognized TPD parameter $key"))
+        mapped = match(r"^(AXIS|OFFSET|SCALE)\.([1-9][0-9]*)$", field)
+        mapped !== nothing && parse(Int, mapped.captures[2]) > nhat &&
+            throw(ArgumentError("$key exceeds the $nhat independent axes declared by $naxes_key"))
+    end
+
+    return nhat == 1 ? _build_tpd_distortion(header, prefix, naxis, Val(1)) :
+                       _build_tpd_distortion(header, prefix, naxis, Val(2))
+end
+
+function parse_tpd_distortions(header::AbstractDict, naxis::Int, alt::Char, minerr::Real)
+    alt_str = alt == ' ' ? "" : string(alt)
+
+    # CPDIS/DP is prior to PC; CQDIS/DQ is sequent to PC and prior to CDELT.
+    prior = ntuple(axis -> _parse_tpd_axis(header, axis, naxis, alt_str, "CPDIS", "DP", "CPERR", minerr), naxis)
+    sequent = ntuple(axis -> _parse_tpd_axis(header, axis, naxis, alt_str, "CQDIS", "DQ", "CQERR", minerr), naxis)
+    return prior, sequent
+end
+
 distortion_pipeline(::Nothing) = NoDistortionPipeline()
 distortion_pipeline(sip::SIPDistortion) = DistortionPipeline(sip)
 
@@ -163,6 +284,107 @@ function evaluate_sip_polynomial(coeff::AbstractMatrix, u::Real, v::Real)
 
     return value
 end
+
+function _evaluate_tpd_coefficients(coeff::AbstractVector, u::T, v::T, ::Val{M}) where {T, M}
+    result = zero(T)
+
+    # One-dimensional TPD uses only pure powers of its attached coordinate.
+    @inbounds for i in eachindex(coeff)
+        c = coeff[i]
+        iszero(c) && continue
+        term = _TPD_TERMS[i]
+        if M == 1
+            term[1] === :mono && term[3] == 0 || continue
+        end
+        result += T(c) * _tpd_term_value(i - 1, u, v)
+    end
+    return result
+end
+
+function _evaluate_tpd(model::TPDDistortion{M}, raw::StaticVector, coeff::AbstractVector) where {M}
+    T = _coordinate_float_type(raw)
+
+    # Normalize and reorder the independent coordinates through the axis map.
+    vars = SVector{M, T}(ntuple(k -> (T(raw[model.axmap[k]]) - T(model.offset[k])) * T(model.scale[k]), M))
+    u = vars[1]
+    v = M == 1 ? zero(T) : vars[2]
+
+    # Optional auxiliary variables are a two-dimensional affine transform.
+    if !isnothing(model.aux)
+        aux = SMatrix{2, 3, T, 6}(model.aux)
+        transformed = aux * SVector{3, T}(one(T), u, v)
+        u, v = transformed
+    end
+    return _evaluate_tpd_coefficients(coeff, u, v, Val(M))
+end
+
+apply_tpd_stage(::Tuple{}, raw::StaticVector) = raw
+
+function apply_tpd_stage(models::Tuple, raw::StaticVector{N, T}) where {N, T}
+    length(models) == N || throw(DimensionMismatch("TPD stage has $(length(models)) axes, expected $N"))
+
+    # Every output is evaluated from the same undistorted input coordinate.
+    return SVector{N, T}(ntuple(j -> begin
+        model = models[j]
+        if isnothing(model)
+            raw[j]
+        else
+            value = _evaluate_tpd(model, raw, model.forward)
+            model.docorr ? raw[j] + value : value
+        end
+    end, N))
+end
+
+function _tpd_reverse_guess(models::Tuple, target::StaticVector{N, T}) where {N, T}
+    # Reverse polynomials provide only the starting point for forward iteration.
+    return SVector{N, T}(ntuple(j -> begin
+        model = models[j]
+        if isnothing(model) || isnothing(model.reverse)
+            target[j]
+        else
+            value = _evaluate_tpd(model, target, model.reverse)
+            model.docorr ? target[j] + value : value
+        end
+    end, N))
+end
+
+invert_tpd_stage(::Tuple{}, target::StaticVector) = target
+
+function invert_tpd_stage(models::Tuple, target::StaticVector{N, T}) where {N, T}
+    raw = _tpd_reverse_guess(models, target)
+    tol = T(_convergence_tol(T))
+
+    # Refine the reverse-polynomial estimate using the forward model and a numerical Jacobian.
+    for _ in 1:30
+        distorted = apply_tpd_stage(models, raw)
+        residual = distorted - target
+        all(j -> abs(residual[j]) <= tol * max(one(T), abs(target[j])), 1:N) && return raw
+
+        jacobian = MMatrix{N, N, T}(undef)
+        for column in 1:N
+            step = clamp(abs(residual[column]) / 2, T(1e-6), one(T))
+            trial = Base.setindex(raw, raw[column] + step, column)
+            shifted = apply_tpd_stage(models, trial)
+            for row in 1:N
+                jacobian[row, column] = (shifted[row] - distorted[row]) / step
+            end
+        end
+        raw -= SMatrix{N, N, T}(jacobian) \ residual
+    end
+
+    residual = apply_tpd_stage(models, raw) - target
+    @warn "TPD inverse failed to converge after 30 iterations (residual $(sqrt(sum(abs2, residual))) > tolerance $tol); returning best estimate"
+    return raw
+end
+
+has_sequent_distortion(::NoDistortionPipeline) = false
+has_sequent_distortion(pipeline::DistortionPipeline) = any(!isnothing, pipeline.tpd_seq)
+
+apply_sequent_distortion(::NoDistortionPipeline, coord::StaticVector) = coord
+apply_sequent_distortion(pipeline::DistortionPipeline, coord::StaticVector) = apply_tpd_stage(pipeline.tpd_seq, coord)
+
+invert_sequent_distortion(::NoDistortionPipeline, coord::StaticVector) = coord
+invert_sequent_distortion(pipeline::DistortionPipeline, coord::StaticVector) = invert_tpd_stage(pipeline.tpd_seq, coord)
 
 sip_pixel_to_focal(::Nothing, pixel::AbstractVector) = SVector{2, _coordinate_float_type(pixel)}(pixel[1], pixel[2])
 sip_pixel_to_focal(::Nothing, pixel::StaticVector) = pixel
@@ -266,7 +488,12 @@ function pixel_to_focal(pipeline::DistortionPipeline, pixel::StaticVector{N}, ::
                                           i == 2 ? T(fy) :
                                           detector[i], N))
     end
-    return coord + _lookup_stage_offset(pipeline.cpdis, detector)
+    lookup_coord = coord + _lookup_stage_offset(pipeline.cpdis, detector)
+    isempty(pipeline.tpd_pre) && return lookup_coord
+
+    # CPDIS functions on different output axes are evaluated from the same input.
+    tpd_coord = apply_tpd_stage(pipeline.tpd_pre, coord)
+    return SVector{N, T}(ntuple(i -> isnothing(pipeline.tpd_pre[i]) ? lookup_coord[i] : tpd_coord[i], N))
 end
 
 function focal_to_pixel(::NoDistortionPipeline, focal::AbstractVector, ::Val{N}) where {N}
@@ -294,7 +521,7 @@ end
 
 # No Paper IV lookup stage is present, so we invert only SIP stage.
 # This dispatch is needed to avoid allocations in the common case of SIP-only distortion.
-function focal_to_pixel(pipeline::DistortionPipeline{S, Tuple{Nothing, Nothing}, Tuple{Nothing, Nothing}}, focal::StaticVector{N}, ::Val{N}) where {S, N}
+function focal_to_pixel(pipeline::DistortionPipeline{S, Tuple{Nothing, Nothing}, Tuple{Nothing, Nothing}, Tuple{}, Q}, focal::StaticVector{N}, ::Val{N}) where {S, Q, N}
     T = _coordinate_float_type(focal)
 
     # Preserve identity behavior for SIP-free pipeline variants.
@@ -308,6 +535,13 @@ function focal_to_pixel(pipeline::DistortionPipeline{S, Tuple{Nothing, Nothing},
         i == 1 ? T(px) :
         i == 2 ? T(py) :
         T(focal[i]), N))
+end
+
+# A TPD-only prior stage can use its reverse polynomial and Newton refinement directly.
+function focal_to_pixel(pipeline::DistortionPipeline{Nothing, Tuple{Nothing, Nothing}, Tuple{Nothing, Nothing}, P, Q}, focal::StaticVector{N}, ::Val{N}) where {P <: Tuple{Any, Vararg{Any}}, Q, N}
+    T = _coordinate_float_type(focal)
+    target = SVector{N, T}(focal)
+    return invert_tpd_stage(pipeline.tpd_pre, target)
 end
 
 # Has Paper IV lookup stage, so we must iterate to invert the full pipeline.

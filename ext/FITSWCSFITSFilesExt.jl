@@ -35,7 +35,8 @@ function _set_fitsfiles_header_card!(dict::Dict{String, Any}, key::String, value
     isnothing(parsed) && return dict
 
     name, parsed_value = parsed
-    if name == "EXTVER" || name == "NAXES" || startswith(name, "AXIS.")
+    if name in ("EXTVER", "NAXES", "DOCORR") ||
+            any(prefix -> startswith(name, prefix), ("AXIS.", "OFFSET.", "SCALE.", "TPD.", "AUX."))
         dict["$(key).$(name)"] = parsed_value
     end
     return dict
