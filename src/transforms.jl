@@ -228,7 +228,7 @@ function pixel_to_world(wcs::WCSTransform, pixel::AbstractVector)
         x_lat = x[lat_idx]   # degrees
 
         # Deproject: (x, y) -> (phi, theta) in radians
-        phi, theta = intermediate_to_native(wcs.projection, x_lon, x_lat)
+        phi, theta = intermediate_to_native(_spherical_projection(wcs.projection), x_lon, x_lat)
 
         # Spherical rotation: (phi, theta) -> (alpha, delta) in radians
         # alpha_p, delta_p are the celestial coords of the native north pole.
@@ -315,7 +315,7 @@ function world_to_pixel(wcs::WCSTransform{N}, world::AbstractVector) where {N}
         phi, theta = celestial_to_native(alpha, delta, alpha_p, delta_p, phi_p)
 
         # Re-project: (phi, theta) -> (x, y) in degrees
-        x_lon, x_lat = native_to_intermediate(wcs.projection, phi, theta)
+        x_lon, x_lat = native_to_intermediate(_spherical_projection(wcs.projection), phi, theta)
 
         # Build intermediate coordinate vector
         # Non-celestial axes: x_i = world_i - crval_i (trivial linear axes)

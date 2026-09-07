@@ -67,7 +67,9 @@ function _paper_iv_lookup_spec(
     )
     dist_key = "$(dist_prefix)$(axis)$(alt_str)"
     haskey(header, dist_key) || return nothing
-    uppercase(String(header[dist_key])) == "LOOKUP" ||
+    dtype = uppercase(strip(String(header[dist_key])))
+    dtype == "TPD" && return nothing
+    dtype == "LOOKUP" ||
         throw(ArgumentError("unsupported Paper IV distortion type $(header[dist_key]) in $dist_key"))
 
     # Skip tables whose declared error is below the requested threshold.
@@ -154,10 +156,26 @@ function _header_references_tabular_axis(header::AbstractDict, alt_str::Abstract
 end
 
 function _header_references_external_wcs_data(header::AbstractDict, alt_str::AbstractString)
-    # Paper IV distortion keywords and TAB axes are the current external-data signals.
-    for key in keys(header)
+    suffix = uppercase(String(alt_str))
+
+    # Only lookup distortions require external arrays; TPD is header-resident.
+    for (key, value) in header
         key isa AbstractString || continue
-        is_lookup_distortion_keyword(key, alt_str) && return true
+        ukey = uppercase(String(key))
+        occursin(Regex("^D2IMDIS[1-9][0-9]*$(suffix)\$"), ukey) && return true
+        occursin(Regex("^D2IMERR[1-9][0-9]*$(suffix)\$"), ukey) && return true
+        ukey == "AXISCORR$(suffix)" && return true
+        if occursin(Regex("^CPDIS[1-9][0-9]*$(suffix)\$"), ukey)
+            uppercase(strip(String(value))) == "LOOKUP" && return true
+        end
+
+        # Undeclared DP/DQ records retain the legacy external-data guard, while
+        # records belonging to an explicit TPD function remain header-resident.
+        parameter = match(Regex("^D([PQ])([1-9][0-9]*)$(suffix)\\."), ukey)
+        isnothing(parameter) && continue
+        dist_prefix = parameter.captures[1] == "P" ? "CPDIS" : "CQDIS"
+        dist_key = "$(dist_prefix)$(parameter.captures[2])$(suffix)"
+        haskey(header, dist_key) && uppercase(strip(String(header[dist_key]))) == "TPD" || return true
     end
 
     return _header_references_tabular_axis(header, alt_str)

@@ -2917,7 +2917,7 @@ end
 
     @testset "TPV inverse" begin
         xcoeff = Float64[0.0, 1.0]
-        ycoeff = Float64[0.0, 0.0, 1.0]
+        ycoeff = Float64[0.0, 1.0]
         # Identity: inverse recovers target.
         u, v = FITSWCS._tpv_inverse(xcoeff, ycoeff, 5.0, -3.0)
         @test u ≈ 5.0
@@ -2927,7 +2927,7 @@ end
         xc = zeros(Float64, 8)
         xc[2] = 1.0      # m=1: x
         xc[8] = 1e-5     # m=7: x³
-        yc = Float64[0.0, 0.0, 1.0]
+        yc = Float64[0.0, 1.0]
         target = 2.0 + 1e-5 * 8.0  # 2 + 1e-5*8
         u, v = FITSWCS._tpv_inverse(xc, yc, target, 0.0)
         @test u ≈ 2.0  atol=1e-10
@@ -2942,7 +2942,7 @@ end
 
     @testset "TPV projection round-trip" begin
         # Identity TPV matches TAN.
-        tpv0 = TPV()
+        tpv0 = TPV(Float64[0.0, 1.0], Float64[0.0, 1.0])
         @test FITSWCS.native_theta0(tpv0) == 90.0
         @test FITSWCS.native_phi0(tpv0) == 0.0
 
@@ -2954,7 +2954,7 @@ end
 
         # Non-trivial TPV: x² term on x, y² term on y.
         xc = Float64[0.0, 1.0, 0.0, 0.0, 5e-6]   # x' = x + 5e-6·x²
-        yc = Float64[0.0, 0.0, 1.0, 0.0, 0.0, 0.0, -3e-6]  # y' = y - 3e-6·y²
+        yc = Float64[0.0, 1.0, 0.0, 0.0, -3e-6]  # y' = y - 3e-6·y²
         tpv1 = TPV(xc, yc)
         for _ in 1:5
             phi = (rand() - 0.5) * 0.1
@@ -2967,7 +2967,7 @@ end
     end
 
     @testset "TPV header parsing" begin
-        # Minimal TPV header (no PV keywords → identity).
+        # Missing TPV coefficients default to zero, as in WCSLIB.
         hdr = Dict{String,Any}(
             "NAXIS" => 2,
             "CTYPE1" => "RA---TPV", "CTYPE2" => "DEC--TPV",
@@ -2977,11 +2977,11 @@ end
         )
         wcs = WCS(hdr)
         @test wcs.projection isa TPV
-        # Should behave like TAN with no extra distortion.
         pix = [256.0, 256.0]
         world = pixel_to_world(wcs, pix)
         @test world[1] ≈ 83.8221  atol=1e-4
         @test world[2] ≈ -5.3911  atol=1e-4
+        @test pixel_to_world(wcs, [300.0, 200.0]) ≈ world
 
         # TPV with PV coefficients.
         hdr2 = Dict{String,Any}(
@@ -2992,8 +2992,8 @@ end
             "CDELT1" => -0.05, "CDELT2" => 0.05,
             "PV1_1" => 1.0,     # identity x term
             "PV1_4" => 1e-6,    # x² term on axis 1
-            "PV2_2" => 1.0,     # identity y term
-            "PV2_6" => -2e-6,   # y² term on axis 2
+            "PV2_1" => 1.0,     # identity y term in axis-local coordinates
+            "PV2_4" => -2e-6,   # y² term on axis 2
         )
         wcs2 = WCS(hdr2)
         t = wcs2.projection
@@ -3001,8 +3001,8 @@ end
         @test t.xcoeff[1] == 0.0     # m=0 (constant), zero-filled gap
         @test t.xcoeff[2] == 1.0     # m=1 (x)
         @test t.xcoeff[5] == 1e-6    # m=4 (x²)
-        @test t.ycoeff[3] == 1.0     # m=2 (y)
-        @test t.ycoeff[7] == -2e-6   # m=6 (y²)
+        @test t.ycoeff[2] == 1.0     # m=1 (attached-axis coordinate)
+        @test t.ycoeff[5] == -2e-6   # m=4 (attached-axis coordinate squared)
 
         # Round-trip at reference pixel.
         pix2 = [128.0, 96.0]
@@ -3010,7 +3010,7 @@ end
         pix2b = world_to_pixel(wcs2, world2)
         @test pix2b ≈ pix2  atol=1e-10
 
-        # TPD CTYPE also works.
+        # TPD is a Paper IV distortion function, not a CTYPE projection.
         hdr3 = Dict{String,Any}(
             "NAXIS" => 2,
             "CTYPE1" => "RA---TPD", "CTYPE2" => "DEC--TPD",
@@ -3018,8 +3018,7 @@ end
             "CRVAL1" => 45.0, "CRVAL2" => 30.0,
             "CDELT1" => -0.01, "CDELT2" => 0.01,
         )
-        wcs3 = WCS(hdr3)
-        @test wcs3.projection isa TPV
+        @test_throws "TPD is a Paper IV distortion function" WCS(hdr3)
     end
 
     @testset "SCAMP compatibility" begin
@@ -3032,7 +3031,7 @@ end
             "CDELT1" => -2.7778e-4, "CDELT2" => 2.7778e-4,
             "PV1_1" => 1.0,     # TPV coefficients hiding as TAN
             "PV1_5" => 1e-6,    # j=5 signals SCAMP
-            "PV2_2" => 1.0,
+            "PV2_1" => 1.0,
         )
         wcs_pre = WCS(hdr_pre)
         @test wcs_pre.projection isa TPV
@@ -3070,7 +3069,7 @@ end
     @testset "TPV Float32 type stability" begin
         # Polynomial eval in Float32.
         xc32 = Float32[0.0, 1.0]
-        yc32 = Float32[0.0, 0.0, 1.0]
+        yc32 = Float32[0.0, 1.0]
         @test @inferred(FITSWCS._evaluate_tpv_polynomial(xc32, 1.0f0, 2.0f0)) isa Float32
 
         # Inverse in Float32.
@@ -3095,6 +3094,7 @@ end
             "CRPIX1" => 256.0, "CRPIX2" => 256.0,
             "CRVAL1" => 83.8221, "CRVAL2" => -5.3911,
             "CDELT1" => -2.7778e-4, "CDELT2" => 2.7778e-4,
+            "PV1_1" => 1.0, "PV2_1" => 1.0,
         )
         wcs32 = WCS(hdr32)
         pix32 = Float32[256.0, 256.0]
@@ -3118,8 +3118,8 @@ end
             "CDELT1" => -2.7778e-4, "CDELT2" => 2.7778e-4,
             "PV1_1" => 1.0,     # identity x
             "PV1_4" => 1e-7,    # small x² correction
-            "PV2_2" => 1.0,     # identity y
-            "PV2_6" => -1e-7,   # small y² correction
+            "PV2_1" => 1.0,     # identity y in axis-local coordinates
+            "PV2_4" => -1e-7,   # small y² correction
         )
         wcs = WCS(hdr)
         @test wcs.projection isa TPV
@@ -3210,3 +3210,6 @@ include("regression_astropy_values.jl")
 
 # WCS slicing tests.
 include("slicing_tests.jl")
+
+# TPV ordering and Paper IV TPD regression tests.
+include("tpv_tpd_tests.jl")

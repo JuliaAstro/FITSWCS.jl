@@ -326,15 +326,16 @@ TAN projection with sequent polynomial distortion (SCAMP convention).
 
 TPV is not a fundamental projection; it is a TAN (gnomonic) projection combined
 with a sequent polynomial distortion whose coefficients are stored in FITS
-`PVi_m` keywords.  The polynomial operates on intermediate world coordinates
-(x, y) in degrees **after** the CD matrix, using the TPD coefficient indexing
-convention.
+`PVi_m` keywords.  WCSLIB applies the polynomial after PC and before CDELT,
+using the TPD coefficient indexing convention.
 
-Coefficients are stored in **direct** form (wcslib convention): the polynomial
-returns the corrected coordinate directly.  The identity polynomial is
-``xcoeff = [0, 1]`` (i.e. ``x' = x``) and ``ycoeff = [0, 0, 1]`` (``y' = y``).
+Coefficients are stored in **direct** form (WCSLIB convention): the polynomial
+returns the corrected coordinate directly.  Since TPD variables are local to
+the attached axis, identity is encoded by coefficient 1 on term 1 for both
+axes.
 
-The CTYPE projection codes `TPV` and `TPD` both map to this type.
+Only the CTYPE projection code `TPV` maps to this type.  TPD is a Paper IV
+distortion function rather than a celestial projection code.
 
 # Fields
 - `xcoeff` – ``PV_{lon\\_axis,m}`` coefficients (direct form)
@@ -345,8 +346,13 @@ struct TPV <: AbstractProjection
     ycoeff::Vector{Float64}
 end
 
-# Default is identity polynomial (= plain TAN).  x' = 1·x, y' = 1·y.
-TPV() = TPV(Float64[0.0, 1.0], Float64[0.0, 0.0, 1.0])
+TPV(xcoeff::AbstractVector, ycoeff::AbstractVector) = TPV(Float64.(xcoeff), Float64.(ycoeff))
+
+# Missing PVi_m coefficients default to zero in WCSLIB.
+TPV() = TPV(Float64[], Float64[])
+
+_spherical_projection(proj::AbstractProjection) = proj
+_spherical_projection(::TPV) = TAN()
 
 # ── Unknown / deferred ────────────────────────────────────────────────────────
 
@@ -479,7 +485,7 @@ function _tpv_inverse(xcoeff::AbstractVector, ycoeff::AbstractVector,
 
     @inbounds for k in 1:max_iter
         x_corr = _evaluate_tpv_polynomial(xcoeff, u, v)
-        y_corr = _evaluate_tpv_polynomial(ycoeff, u, v)
+        y_corr = _evaluate_tpv_polynomial(ycoeff, v, u)
         du = x_corr - xt
         dv = y_corr - yt
         u -= du
@@ -773,7 +779,7 @@ delegate to the TAN (gnomonic) inverse.
 """
 function intermediate_to_native(proj::TPV, x::Real, y::Real)
     x_corr = _evaluate_tpv_polynomial(proj.xcoeff, x, y)
-    y_corr = _evaluate_tpv_polynomial(proj.ycoeff, x, y)
+    y_corr = _evaluate_tpv_polynomial(proj.ycoeff, y, x)
     return intermediate_to_native(TAN(), x_corr, y_corr)
 end
 
